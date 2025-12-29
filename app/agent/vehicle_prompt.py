@@ -43,7 +43,7 @@ Output rules:
 - No extra text
 
 JSON format:
-{
+{{
   "diagnosis": "string",
   "explanation": "string",
   "severity": number,
@@ -51,7 +51,7 @@ JSON format:
   "steps": ["string"],
   "follow_up_question": "string",
   "confidence": number
-}
+}}
 
 Rules:
 - steps empty unless action = DIY
