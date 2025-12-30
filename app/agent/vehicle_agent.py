@@ -13,7 +13,7 @@ llm = ChatGroq(
     temperature=0.2
 )
 
-def run_vehicle_agent(user_input: str, conversation_history: str = "") -> dict:
+def run_vehicle_agent(user_input: str, conversation_history: str ,user_id : str) -> dict:
     prompt = vehicle_prompt.format(
         conversation_history=conversation_history or "None",
         user_input=user_input
