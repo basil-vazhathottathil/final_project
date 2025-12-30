@@ -18,6 +18,7 @@ async def chat_vehicle(
 ):
     return run_vehicle_agent(
         user_input=req.message,
-        conversation_history=req.conversation_history,
-        user_id=user["sub"],  # Clerk user id
+        chat_id=req.chat_id,          # ✅ session id
+        user_id=user["sub"],          # Clerk user id
+        #vehicle_id=req.vehicle_id     # optional
     )

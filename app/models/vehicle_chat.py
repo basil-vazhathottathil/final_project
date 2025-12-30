@@ -1,11 +1,13 @@
 # app/models/vehicle_chat.py
+
 from pydantic import BaseModel
 from typing import List, Optional
 
 
 class ChatRequest(BaseModel):
-    message: str
-    conversation_history: Optional[str] = ""
+    chat_id: str                 # session id
+    message: str                 # user message
+    vehicle_id: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
