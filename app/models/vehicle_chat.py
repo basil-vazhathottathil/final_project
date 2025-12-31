@@ -1,11 +1,12 @@
 # app/models/vehicle_chat.py
 
-from pydantic import BaseModel
+from uuid import UUID
+from pydantic import BaseModel # type: ignore
 from typing import List, Optional
 
 
 class ChatRequest(BaseModel):
-    chat_id: str                 # session id
+    chat_id: UUID                 # session id
     message: str                 # user message
     vehicle_id: Optional[str] = None
 

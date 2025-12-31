@@ -1,12 +1,17 @@
 import json
-from langchain_groq import ChatGroq # type: ignore
-from langchain_core.messages import SystemMessage, HumanMessage # type: ignore
+from uuid import UUID
+
+from langchain_groq import ChatGroq  # type: ignore
+from langchain_core.messages import SystemMessage, HumanMessage  # type: ignore
+
 from app.config import GROQ_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.db.db import load_short_term_memory, save_chat_turn
 
+
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not set")
+
 
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
@@ -17,17 +22,17 @@ llm = ChatGroq(
 
 def run_vehicle_agent(
     user_input: str,
-    chat_id: str,
+    chat_id: UUID,              # ✅ UUID end-to-end
     user_id: str,
     vehicle_id: str | None = None
 ) -> dict:
 
-    # 1️⃣ Load previous conversation (string)
+    # 1️⃣ Load previous conversation for this session
     conversation_history = load_short_term_memory(chat_id, limit=5)
     if not conversation_history:
         conversation_history = "No prior conversation."
 
-    # 2️⃣ Build system prompt
+    # 2️⃣ Build system prompt with history
     prompt = vehicle_prompt.format(
         conversation_history=conversation_history,
         user_input=user_input
@@ -38,13 +43,13 @@ def run_vehicle_agent(
         HumanMessage(content="Respond strictly in JSON.")
     ]
 
-    # 3️⃣ Call LLM
+    # 3️⃣ Call the LLM
     response = llm.invoke(messages)
     ai_text = response.content
 
-    # 4️⃣ Save this chat turn (user + AI)
+    # 4️⃣ Save this chat turn (user + AI) to DB
     save_chat_turn(
-        chat_id=chat_id,
+        chat_id=chat_id,        # ✅ UUID (no str conversion)
         user_id=user_id,
         vehicle_id=vehicle_id,
         prompt=user_input,

@@ -1,6 +1,7 @@
 # Database helpers for AI chat sessions (short-term memory)
 
-from supabase import create_client # type: ignore
+from uuid import UUID
+from supabase import create_client  # type: ignore
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
 # Create Supabase client
@@ -11,7 +12,7 @@ supabase = create_client(
 
 
 def save_chat_turn(
-    chat_id: str,
+    chat_id: UUID,               # ✅ UUID here
     user_id: str,
     vehicle_id: str | None,
     prompt: str,
@@ -21,7 +22,7 @@ def save_chat_turn(
     Save one user + AI exchange
     """
     supabase.table("ai_chat_history").insert({
-        "chat_id": chat_id,
+        "chat_id": str(chat_id),  # ✅ convert ONLY here
         "user_id": user_id,
         "vehicle_id": vehicle_id,
         "prompt": prompt,
@@ -29,7 +30,7 @@ def save_chat_turn(
     }).execute()
 
 
-def load_short_term_memory(chat_id: str, limit: int = 5) -> str:
+def load_short_term_memory(chat_id: UUID, limit: int = 5) -> str:
     """
     Load recent conversation for a session
     """
@@ -37,7 +38,7 @@ def load_short_term_memory(chat_id: str, limit: int = 5) -> str:
         supabase
         .table("ai_chat_history")
         .select("prompt, response_ai")
-        .eq("chat_id", chat_id)
+        .eq("chat_id", str(chat_id))   # ✅ convert ONLY here
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
@@ -67,3 +68,9 @@ def get_user_sessions(user_id: str):
     )
 
     return list({row["chat_id"] for row in response.data or []})
+
+def ensure_user_exists(user_id: str, email: str | None = None):
+    supabase.table("users").upsert({
+        "id": user_id,
+        "email": email
+    }).execute()
