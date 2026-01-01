@@ -59,10 +59,6 @@ YOUTUBE_INTENT_KEYWORDS = [
 ]
 
 
-def wants_youtube(text: str) -> bool:
-    return any(k in text.lower() for k in YOUTUBE_INTENT_KEYWORDS)
-
-
 def web_search_youtube(query: str) -> List[str]:
     response = tavily.search(
         query=f"site:youtube.com {query}",
@@ -76,9 +72,6 @@ def web_search_youtube(query: str) -> List[str]:
 # -----------------------------
 
 def extract_obd_codes(text: str) -> List[str]:
-    """
-    Extract P / B / C / U OBD-II codes from text
-    """
     return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
 
 
@@ -87,15 +80,15 @@ def remove_duplicate_questions(questions: List[str], history: str) -> List[str]:
 
 
 def normalize_agent_response(resp: dict, history: str) -> dict:
-    action = resp.get("action", "ESCALATE")
+    action = resp.get("action", "ASK")
 
     if action not in {"DIY", "ASK", "ESCALATE"}:
-        resp["action"] = "ESCALATE"
+        resp["action"] = "ASK"
 
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
     resp.setdefault("youtube_urls", [])
-    resp.setdefault("severity", 0.7)
+    resp.setdefault("severity", 0.5)
     resp.setdefault("confidence", 0.5)
 
     if resp["action"] == "ASK":
@@ -108,9 +101,9 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
         # 🚨 ASK must always ask something
         if not resp["follow_up_questions"]:
             resp["follow_up_questions"] = [
-                "Does the engine idle smoothly or feel rough?",
-                "Do you hear any unusual hissing or air-leak sounds?",
-                "Has fuel consumption changed recently?",
+                "Can you describe what the car is doing right now?",
+                "Are there any warning lights on the dashboard?",
+                "Does this happen while starting, idling, or driving?"
             ]
 
     if resp["action"] != "DIY":
@@ -134,16 +127,16 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
     if not obd:
         return resp
 
-    # 🔒 Deterministic diagnosis
     resp["diagnosis"] = f"{code}: {obd['meaning']}"
     resp["explanation"] = obd["description"]
 
-    # 🚨 Safety first
+    # 🚨 Safety-critical → hard ESCALATE
     if not obd["diy_possible"]:
         resp["action"] = "ESCALATE"
         resp["steps"] = []
         resp["follow_up_questions"] = []
         resp["youtube_urls"] = []
+        resp["confidence"] = max(resp.get("confidence", 0.5), 0.8)
         return resp
 
     # 🧠 Multi-cause → ASK
@@ -151,13 +144,6 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
         resp["action"] = "ASK"
         resp["steps"] = []
         resp["youtube_urls"] = []
-
-        if not resp.get("follow_up_questions"):
-            resp["follow_up_questions"] = [
-                "Does the engine idle smoothly or feel rough?",
-                "Do you hear any hissing sounds from the engine bay?",
-                "Did this issue start suddenly or gradually?",
-            ]
 
     return resp
 
@@ -173,10 +159,10 @@ def enforce_state_machine(resp: dict) -> dict:
         resp["steps"] = []
         resp["youtube_urls"] = []
 
-        if not resp["follow_up_questions"]:
+        if not resp.get("follow_up_questions"):
             resp["follow_up_questions"] = [
-                "Can you describe any other symptoms you notice?",
-                "Does the issue happen all the time or only sometimes?",
+                "Can you share any other symptoms you notice?",
+                "Does the issue happen all the time or only sometimes?"
             ]
 
     return resp
@@ -200,22 +186,35 @@ def run_vehicle_agent(
         user_input=user_input,
     )
 
-    ai_text = llm.invoke(messages).content
-
-    save_chat_turn(
-        chat_id=chat_id,
-        user_id=user_id,
-        vehicle_id=vehicle_id,
-        prompt=user_input,
-        response_ai=ai_text,
-    )
-
     try:
+        ai_text = llm.invoke(messages).content
+
+        save_chat_turn(
+            chat_id=chat_id,
+            user_id=user_id,
+            vehicle_id=vehicle_id,
+            prompt=user_input,
+            response_ai=ai_text,
+        )
+
         parsed = json.loads(ai_text)
 
         parsed = normalize_agent_response(parsed, history)
         parsed = apply_obd_logic(parsed, user_input)
         parsed = enforce_state_machine(parsed)
+
+        # 🛑 NEVER allow low-confidence ESCALATE (understanding failure)
+        if parsed["action"] == "ESCALATE" and parsed.get("confidence", 1) < 0.4:
+            parsed["action"] = "ASK"
+            parsed["steps"] = []
+            parsed["youtube_urls"] = []
+
+            if not parsed.get("follow_up_questions"):
+                parsed["follow_up_questions"] = [
+                    "Can you explain the issue in a bit more detail?",
+                    "When did this problem first start?",
+                    "Is the car still drivable right now?"
+                ]
 
         # 📺 YouTube ONLY when DIY + steps exist
         if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
@@ -224,13 +223,18 @@ def run_vehicle_agent(
         return parsed
 
     except Exception:
+        # ⚠️ Understanding / parsing failure → ASK, NOT ESCALATE
         return {
-            "diagnosis": "Unable to safely identify the issue",
-            "explanation": "I could not clearly understand the problem.",
-            "severity": 0.8,
-            "action": "ESCALATE",
+            "diagnosis": "I couldn’t clearly understand the issue yet",
+            "explanation": "Let’s try again with a bit more detail so I can help you properly.",
+            "severity": 0.3,
+            "action": "ASK",
             "steps": [],
-            "follow_up_questions": [],
+            "follow_up_questions": [
+                "Can you describe what the car is doing right now?",
+                "Are there any warning lights on the dashboard?",
+                "Does this happen while starting, idling, or driving?"
+            ],
             "youtube_urls": [],
-            "confidence": 0.2,
+            "confidence": 0.3,
         }
