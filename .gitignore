@@ -10,3 +10,4 @@ wheels/
 .venv
 .env
 sup.py
+obd_codes.json
