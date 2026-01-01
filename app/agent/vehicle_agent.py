@@ -9,6 +9,7 @@ from tavily import TavilyClient
 
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
+from app.agent.vehicle_symptom import SYMPTOM_GUARDS
 from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
 
@@ -48,15 +49,6 @@ User issue:
 # -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
-YOUTUBE_INTENT_KEYWORDS = [
-    "youtube",
-    "video",
-    "tutorial",
-    "how to",
-    "guide",
-    "watch",
-]
 
 
 def web_search_youtube(query: str) -> List[str]:
@@ -98,12 +90,11 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
             resp["follow_up_questions"], history
         )
 
-        # 🚨 ASK must always ask something
         if not resp["follow_up_questions"]:
             resp["follow_up_questions"] = [
                 "Can you describe what the car is doing right now?",
                 "Are there any warning lights on the dashboard?",
-                "Does this happen while starting, idling, or driving?"
+                "Does this happen while starting, idling, or driving?",
             ]
 
     if resp["action"] != "DIY":
@@ -114,7 +105,7 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
 
 # -----------------------------
-# OBD logic (DATA-DRIVEN)
+# OBD logic (facts layer)
 # -----------------------------
 
 def apply_obd_logic(resp: dict, user_input: str) -> dict:
@@ -149,11 +140,34 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
 
 
 # -----------------------------
+# Symptom guard (understanding layer)
+# -----------------------------
+
+def apply_symptom_guard(resp: dict, user_input: str) -> dict:
+    text = user_input.lower()
+
+    for symptom in SYMPTOM_GUARDS.values():
+        if any(k in text for k in symptom["keywords"]):
+            resp["diagnosis"] = symptom["diagnosis"]
+            resp["explanation"] = symptom["explanation"]
+            resp["action"] = "ASK"
+            resp["steps"] = []
+            resp["youtube_urls"] = []
+            resp["follow_up_questions"] = symptom["questions"]
+            resp["confidence"] = max(
+                resp.get("confidence", 0.3),
+                symptom["confidence"]
+            )
+            return resp
+
+    return resp
+
+
+# -----------------------------
 # State enforcement
 # -----------------------------
 
 def enforce_state_machine(resp: dict) -> dict:
-    # 🚫 DIY without steps is forbidden
     if resp["action"] == "DIY" and not resp["steps"]:
         resp["action"] = "ASK"
         resp["steps"] = []
@@ -162,7 +176,7 @@ def enforce_state_machine(resp: dict) -> dict:
         if not resp.get("follow_up_questions"):
             resp["follow_up_questions"] = [
                 "Can you share any other symptoms you notice?",
-                "Does the issue happen all the time or only sometimes?"
+                "Does the issue happen all the time or only sometimes?",
             ]
 
     return resp
@@ -200,21 +214,20 @@ def run_vehicle_agent(
         parsed = json.loads(ai_text)
 
         parsed = normalize_agent_response(parsed, history)
-        parsed = apply_obd_logic(parsed, user_input)
+        parsed = apply_obd_logic(parsed, user_input)      # facts
+        parsed = apply_symptom_guard(parsed, user_input) # symptoms
         parsed = enforce_state_machine(parsed)
 
-        # 🛑 NEVER allow low-confidence ESCALATE (understanding failure)
+        # 🛑 Never block conversation due to understanding failure
         if parsed["action"] == "ESCALATE" and parsed.get("confidence", 1) < 0.4:
             parsed["action"] = "ASK"
             parsed["steps"] = []
             parsed["youtube_urls"] = []
-
-            if not parsed.get("follow_up_questions"):
-                parsed["follow_up_questions"] = [
-                    "Can you explain the issue in a bit more detail?",
-                    "When did this problem first start?",
-                    "Is the car still drivable right now?"
-                ]
+            parsed["follow_up_questions"] = [
+                "Can you explain the issue in a bit more detail?",
+                "When did this problem first start?",
+                "Is the car still drivable right now?",
+            ]
 
         # 📺 YouTube ONLY when DIY + steps exist
         if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
@@ -223,7 +236,7 @@ def run_vehicle_agent(
         return parsed
 
     except Exception:
-        # ⚠️ Understanding / parsing failure → ASK, NOT ESCALATE
+        # ⚠️ True understanding failure → ASK, never ESCALATE
         return {
             "diagnosis": "I couldn’t clearly understand the issue yet",
             "explanation": "Let’s try again with a bit more detail so I can help you properly.",
@@ -233,7 +246,7 @@ def run_vehicle_agent(
             "follow_up_questions": [
                 "Can you describe what the car is doing right now?",
                 "Are there any warning lights on the dashboard?",
-                "Does this happen while starting, idling, or driving?"
+                "Does this happen while starting, idling, or driving?",
             ],
             "youtube_urls": [],
             "confidence": 0.3,
