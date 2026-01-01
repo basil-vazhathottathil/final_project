@@ -1,4 +1,5 @@
 import json
+import re
 from uuid import UUID
 from typing import List
 
@@ -9,22 +10,11 @@ from tavily import TavilyClient
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.db.db import load_short_term_memory, save_chat_turn
+from app.data import OBD_CODES
 
 
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not set")
-
-
-# -----------------------------
-# Constants
-# -----------------------------
-
-CONFIDENCE_LOCK_THRESHOLD = 0.75
-
-OBD_MULTI_CAUSE_CODES = {
-    "P0171",
-    "P0174",
-}
 
 
 # -----------------------------
@@ -68,41 +58,9 @@ YOUTUBE_INTENT_KEYWORDS = [
     "watch",
 ]
 
-GENERAL_WEB_INTENT_KEYWORDS = [
-    "latest",
-    "news",
-    "recall",
-    "price",
-    "cost",
-    "cause",
-    "meaning",
-    "why",
-    "what is",
-    "info",
-    "details",
-]
-
 
 def wants_youtube(text: str) -> bool:
     return any(k in text.lower() for k in YOUTUBE_INTENT_KEYWORDS)
-
-
-def wants_web_search(text: str) -> bool:
-    return any(k in text.lower() for k in GENERAL_WEB_INTENT_KEYWORDS)
-
-
-def web_search_general(query: str) -> str:
-    response = tavily.search(query=query, max_results=5)
-    results = []
-
-    for r in response.get("results", []):
-        title = r.get("title")
-        url = r.get("url")
-        content = r.get("content")
-        if title and url and content:
-            results.append(f"- {title}: {content} ({url})")
-
-    return "\n".join(results)
 
 
 def web_search_youtube(query: str) -> List[str]:
@@ -110,20 +68,19 @@ def web_search_youtube(query: str) -> List[str]:
         query=f"site:youtube.com {query}",
         max_results=5,
     )
-
-    videos = []
-    for r in response.get("results", []):
-        title = r.get("title")
-        url = r.get("url")
-        if title and url:
-            videos.append(url)
-
-    return videos
+    return [r["url"] for r in response.get("results", []) if "url" in r]
 
 
 # -----------------------------
 # Helpers
 # -----------------------------
+
+def extract_obd_codes(text: str) -> List[str]:
+    """
+    Extract P / B / C / U OBD-II codes from text
+    """
+    return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
+
 
 def remove_duplicate_questions(questions: List[str], history: str) -> List[str]:
     return [q for q in questions if q.lower() not in history.lower()]
@@ -148,6 +105,14 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
             resp["follow_up_questions"], history
         )
 
+        # 🚨 ASK must always ask something
+        if not resp["follow_up_questions"]:
+            resp["follow_up_questions"] = [
+                "Does the engine idle smoothly or feel rough?",
+                "Do you hear any unusual hissing or air-leak sounds?",
+                "Has fuel consumption changed recently?",
+            ]
+
     if resp["action"] != "DIY":
         resp["steps"] = []
         resp["youtube_urls"] = []
@@ -155,17 +120,34 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
     return resp
 
 
-def enforce_state_machine(resp: dict, user_input: str) -> dict:
-    """
-    HARD GUARDRails:
-    - No DIY without steps
-    - OBD multi-cause codes must ASK first
-    """
+# -----------------------------
+# OBD logic (DATA-DRIVEN)
+# -----------------------------
 
-    action = resp.get("action")
+def apply_obd_logic(resp: dict, user_input: str) -> dict:
+    codes = extract_obd_codes(user_input)
+    if not codes:
+        return resp
 
-    # 🚫 DIY without steps → ASK
-    if action == "DIY" and not resp.get("steps"):
+    code = codes[0]
+    obd = OBD_CODES.get(code)
+    if not obd:
+        return resp
+
+    # 🔒 Deterministic diagnosis
+    resp["diagnosis"] = f"{code}: {obd['meaning']}"
+    resp["explanation"] = obd["description"]
+
+    # 🚨 Safety first
+    if not obd["diy_possible"]:
+        resp["action"] = "ESCALATE"
+        resp["steps"] = []
+        resp["follow_up_questions"] = []
+        resp["youtube_urls"] = []
+        return resp
+
+    # 🧠 Multi-cause → ASK
+    if obd["multi_cause"]:
         resp["action"] = "ASK"
         resp["steps"] = []
         resp["youtube_urls"] = []
@@ -177,10 +159,25 @@ def enforce_state_machine(resp: dict, user_input: str) -> dict:
                 "Did this issue start suddenly or gradually?",
             ]
 
-    # 🚗 OBD multi-cause codes must ASK first
-    if any(code in user_input.upper() for code in OBD_MULTI_CAUSE_CODES):
-        if resp["action"] == "DIY" and not resp.get("steps"):
-            resp["action"] = "ASK"
+    return resp
+
+
+# -----------------------------
+# State enforcement
+# -----------------------------
+
+def enforce_state_machine(resp: dict) -> dict:
+    # 🚫 DIY without steps is forbidden
+    if resp["action"] == "DIY" and not resp["steps"]:
+        resp["action"] = "ASK"
+        resp["steps"] = []
+        resp["youtube_urls"] = []
+
+        if not resp["follow_up_questions"]:
+            resp["follow_up_questions"] = [
+                "Can you describe any other symptoms you notice?",
+                "Does the issue happen all the time or only sometimes?",
+            ]
 
     return resp
 
@@ -198,30 +195,9 @@ def run_vehicle_agent(
 
     history = load_short_term_memory(chat_id, limit=5) or "No prior conversation."
 
-    # 🌐 Intent-aware web search
-    web_context = ""
-
-    if wants_youtube(user_input):
-        yt_results = web_search_youtube(user_input)
-        if yt_results:
-            web_context = (
-                "The user asked for video tutorials. "
-                "Use ONLY the YouTube links below.\n"
-                + "\n".join(yt_results)
-            )
-
-    elif wants_web_search(user_input):
-        web_results = web_search_general(user_input)
-        if web_results:
-            web_context = (
-                "The following information comes from live internet search results. "
-                "Use these facts accurately.\n"
-                + web_results
-            )
-
     messages = prompt.format_messages(
         conversation_history=history,
-        user_input=f"{user_input}\n\n{web_context}",
+        user_input=user_input,
     )
 
     ai_text = llm.invoke(messages).content
@@ -236,16 +212,18 @@ def run_vehicle_agent(
 
     try:
         parsed = json.loads(ai_text)
-        parsed = normalize_agent_response(parsed, history)
-        parsed = enforce_state_machine(parsed, user_input)
 
-        # 📺 Inject YouTube ONLY when DIY + steps exist
+        parsed = normalize_agent_response(parsed, history)
+        parsed = apply_obd_logic(parsed, user_input)
+        parsed = enforce_state_machine(parsed)
+
+        # 📺 YouTube ONLY when DIY + steps exist
         if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
             parsed["youtube_urls"] = web_search_youtube(parsed["diagnosis"])
 
         return parsed
 
-    except json.JSONDecodeError:
+    except Exception:
         return {
             "diagnosis": "Unable to safely identify the issue",
             "explanation": "I could not clearly understand the problem.",
