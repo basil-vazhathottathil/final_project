@@ -1,4 +1,5 @@
 import json
+import re
 from uuid import UUID
 from typing import List
 
@@ -9,6 +10,7 @@ from tavily import TavilyClient
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.db.db import load_short_term_memory, save_chat_turn
+from app.data import OBD_CODES
 
 
 if not GROQ_API_KEY:
@@ -40,6 +42,7 @@ User issue:
     ]
 )
 
+
 # -----------------------------
 # Web search setup
 # -----------------------------
@@ -52,21 +55,7 @@ YOUTUBE_INTENT_KEYWORDS = [
     "tutorial",
     "how to",
     "guide",
-    "watch"
-]
-
-GENERAL_WEB_INTENT_KEYWORDS = [
-    "latest",
-    "news",
-    "recall",
-    "price",
-    "cost",
-    "cause",
-    "meaning",
-    "why",
-    "what is",
-    "info",
-    "details"
+    "watch",
 ]
 
 
@@ -74,45 +63,24 @@ def wants_youtube(text: str) -> bool:
     return any(k in text.lower() for k in YOUTUBE_INTENT_KEYWORDS)
 
 
-def wants_web_search(text: str) -> bool:
-    return any(k in text.lower() for k in GENERAL_WEB_INTENT_KEYWORDS)
-
-
-def web_search_general(query: str) -> str:
-    response = tavily.search(query=query, max_results=5)
-
-    results = []
-    for r in response.get("results", []):
-        title = r.get("title")
-        url = r.get("url")
-        content = r.get("content")
-
-        if title and url and content:
-            results.append(f"- {title}: {content} ({url})")
-
-    return "\n".join(results)
-
-
-def web_search_youtube(query: str) -> str:
+def web_search_youtube(query: str) -> List[str]:
     response = tavily.search(
         query=f"site:youtube.com {query}",
-        max_results=5
+        max_results=5,
     )
-
-    videos = []
-    for r in response.get("results", []):
-        title = r.get("title")
-        url = r.get("url")
-
-        if title and url:
-            videos.append(f"- {title}: {url}")
-
-    return "\n".join(videos)
+    return [r["url"] for r in response.get("results", []) if "url" in r]
 
 
 # -----------------------------
 # Helpers
 # -----------------------------
+
+def extract_obd_codes(text: str) -> List[str]:
+    """
+    Extract P / B / C / U OBD-II codes from text
+    """
+    return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
+
 
 def remove_duplicate_questions(questions: List[str], history: str) -> List[str]:
     return [q for q in questions if q.lower() not in history.lower()]
@@ -126,21 +94,90 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
+    resp.setdefault("youtube_urls", [])
+    resp.setdefault("severity", 0.7)
+    resp.setdefault("confidence", 0.5)
 
     if resp["action"] == "ASK":
         resp["steps"] = []
+        resp["youtube_urls"] = []
         resp["follow_up_questions"] = remove_duplicate_questions(
-            resp["follow_up_questions"][:2],
-            history
+            resp["follow_up_questions"], history
         )
-    else:
-        resp["follow_up_questions"] = []
+
+        # 🚨 ASK must always ask something
+        if not resp["follow_up_questions"]:
+            resp["follow_up_questions"] = [
+                "Does the engine idle smoothly or feel rough?",
+                "Do you hear any unusual hissing or air-leak sounds?",
+                "Has fuel consumption changed recently?",
+            ]
 
     if resp["action"] != "DIY":
         resp["steps"] = []
+        resp["youtube_urls"] = []
 
-    resp.setdefault("severity", 0.7)
-    resp.setdefault("confidence", 0.5)
+    return resp
+
+
+# -----------------------------
+# OBD logic (DATA-DRIVEN)
+# -----------------------------
+
+def apply_obd_logic(resp: dict, user_input: str) -> dict:
+    codes = extract_obd_codes(user_input)
+    if not codes:
+        return resp
+
+    code = codes[0]
+    obd = OBD_CODES.get(code)
+    if not obd:
+        return resp
+
+    # 🔒 Deterministic diagnosis
+    resp["diagnosis"] = f"{code}: {obd['meaning']}"
+    resp["explanation"] = obd["description"]
+
+    # 🚨 Safety first
+    if not obd["diy_possible"]:
+        resp["action"] = "ESCALATE"
+        resp["steps"] = []
+        resp["follow_up_questions"] = []
+        resp["youtube_urls"] = []
+        return resp
+
+    # 🧠 Multi-cause → ASK
+    if obd["multi_cause"]:
+        resp["action"] = "ASK"
+        resp["steps"] = []
+        resp["youtube_urls"] = []
+
+        if not resp.get("follow_up_questions"):
+            resp["follow_up_questions"] = [
+                "Does the engine idle smoothly or feel rough?",
+                "Do you hear any hissing sounds from the engine bay?",
+                "Did this issue start suddenly or gradually?",
+            ]
+
+    return resp
+
+
+# -----------------------------
+# State enforcement
+# -----------------------------
+
+def enforce_state_machine(resp: dict) -> dict:
+    # 🚫 DIY without steps is forbidden
+    if resp["action"] == "DIY" and not resp["steps"]:
+        resp["action"] = "ASK"
+        resp["steps"] = []
+        resp["youtube_urls"] = []
+
+        if not resp["follow_up_questions"]:
+            resp["follow_up_questions"] = [
+                "Can you describe any other symptoms you notice?",
+                "Does the issue happen all the time or only sometimes?",
+            ]
 
     return resp
 
@@ -158,29 +195,9 @@ def run_vehicle_agent(
 
     history = load_short_term_memory(chat_id, limit=5) or "No prior conversation."
 
-    # 🌐 Intent-aware web search
-    web_context = ""
-
-    if wants_youtube(user_input):
-        search_results = web_search_youtube(user_input)
-        web_context = (
-            "The user asked for video tutorials. "
-            "Use ONLY the YouTube links below. "
-            "Do NOT invent links.\n"
-            f"{search_results}"
-        )
-
-    elif wants_web_search(user_input):
-        search_results = web_search_general(user_input)
-        web_context = (
-            "The following information comes from live internet search results. "
-            "Use these facts accurately and do NOT hallucinate.\n"
-            f"{search_results}"
-        )
-
     messages = prompt.format_messages(
         conversation_history=history,
-        user_input=f"{user_input}\n\n{web_context}",
+        user_input=user_input,
     )
 
     ai_text = llm.invoke(messages).content
@@ -195,9 +212,18 @@ def run_vehicle_agent(
 
     try:
         parsed = json.loads(ai_text)
-        return normalize_agent_response(parsed, history)
 
-    except json.JSONDecodeError:
+        parsed = normalize_agent_response(parsed, history)
+        parsed = apply_obd_logic(parsed, user_input)
+        parsed = enforce_state_machine(parsed)
+
+        # 📺 YouTube ONLY when DIY + steps exist
+        if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
+            parsed["youtube_urls"] = web_search_youtube(parsed["diagnosis"])
+
+        return parsed
+
+    except Exception:
         return {
             "diagnosis": "Unable to safely identify the issue",
             "explanation": "I could not clearly understand the problem.",
@@ -205,5 +231,6 @@ def run_vehicle_agent(
             "action": "ESCALATE",
             "steps": [],
             "follow_up_questions": [],
+            "youtube_urls": [],
             "confidence": 0.2,
         }
