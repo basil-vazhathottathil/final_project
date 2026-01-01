@@ -21,6 +21,11 @@ if not GROQ_API_KEY:
 
 CONFIDENCE_LOCK_THRESHOLD = 0.75
 
+OBD_MULTI_CAUSE_CODES = {
+    "P0171",
+    "P0174",
+}
+
 
 # -----------------------------
 # LLM setup
@@ -60,7 +65,7 @@ YOUTUBE_INTENT_KEYWORDS = [
     "tutorial",
     "how to",
     "guide",
-    "watch"
+    "watch",
 ]
 
 GENERAL_WEB_INTENT_KEYWORDS = [
@@ -74,7 +79,7 @@ GENERAL_WEB_INTENT_KEYWORDS = [
     "why",
     "what is",
     "info",
-    "details"
+    "details",
 ]
 
 
@@ -88,34 +93,32 @@ def wants_web_search(text: str) -> bool:
 
 def web_search_general(query: str) -> str:
     response = tavily.search(query=query, max_results=5)
-
     results = []
+
     for r in response.get("results", []):
         title = r.get("title")
         url = r.get("url")
         content = r.get("content")
-
         if title and url and content:
             results.append(f"- {title}: {content} ({url})")
 
     return "\n".join(results)
 
 
-def web_search_youtube(query: str) -> str:
+def web_search_youtube(query: str) -> List[str]:
     response = tavily.search(
         query=f"site:youtube.com {query}",
-        max_results=5
+        max_results=5,
     )
 
     videos = []
     for r in response.get("results", []):
         title = r.get("title")
         url = r.get("url")
-
         if title and url:
-            videos.append(f"- {title}: {url}")
+            videos.append(url)
 
-    return "\n".join(videos)
+    return videos
 
 
 # -----------------------------
@@ -135,22 +138,49 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
     resp.setdefault("youtube_urls", [])
+    resp.setdefault("severity", 0.7)
+    resp.setdefault("confidence", 0.5)
 
     if resp["action"] == "ASK":
         resp["steps"] = []
+        resp["youtube_urls"] = []
         resp["follow_up_questions"] = remove_duplicate_questions(
-            resp["follow_up_questions"],
-            history
+            resp["follow_up_questions"], history
         )
-    else:
-        resp["follow_up_questions"] = []
 
     if resp["action"] != "DIY":
         resp["steps"] = []
         resp["youtube_urls"] = []
 
-    resp.setdefault("severity", 0.7)
-    resp.setdefault("confidence", 0.5)
+    return resp
+
+
+def enforce_state_machine(resp: dict, user_input: str) -> dict:
+    """
+    HARD GUARDRails:
+    - No DIY without steps
+    - OBD multi-cause codes must ASK first
+    """
+
+    action = resp.get("action")
+
+    # 🚫 DIY without steps → ASK
+    if action == "DIY" and not resp.get("steps"):
+        resp["action"] = "ASK"
+        resp["steps"] = []
+        resp["youtube_urls"] = []
+
+        if not resp.get("follow_up_questions"):
+            resp["follow_up_questions"] = [
+                "Does the engine idle smoothly or feel rough?",
+                "Do you hear any hissing sounds from the engine bay?",
+                "Did this issue start suddenly or gradually?",
+            ]
+
+    # 🚗 OBD multi-cause codes must ASK first
+    if any(code in user_input.upper() for code in OBD_MULTI_CAUSE_CODES):
+        if resp["action"] == "DIY" and not resp.get("steps"):
+            resp["action"] = "ASK"
 
     return resp
 
@@ -172,21 +202,22 @@ def run_vehicle_agent(
     web_context = ""
 
     if wants_youtube(user_input):
-        search_results = web_search_youtube(user_input)
-        web_context = (
-            "The user asked for video tutorials. "
-            "Use ONLY the YouTube links below. "
-            "Do NOT invent links.\n"
-            f"{search_results}"
-        )
+        yt_results = web_search_youtube(user_input)
+        if yt_results:
+            web_context = (
+                "The user asked for video tutorials. "
+                "Use ONLY the YouTube links below.\n"
+                + "\n".join(yt_results)
+            )
 
     elif wants_web_search(user_input):
-        search_results = web_search_general(user_input)
-        web_context = (
-            "The following information comes from live internet search results. "
-            "Use these facts accurately and do NOT hallucinate.\n"
-            f"{search_results}"
-        )
+        web_results = web_search_general(user_input)
+        if web_results:
+            web_context = (
+                "The following information comes from live internet search results. "
+                "Use these facts accurately.\n"
+                + web_results
+            )
 
     messages = prompt.format_messages(
         conversation_history=history,
@@ -206,23 +237,11 @@ def run_vehicle_agent(
     try:
         parsed = json.loads(ai_text)
         parsed = normalize_agent_response(parsed, history)
+        parsed = enforce_state_machine(parsed, user_input)
 
-        # 🔒 Enforce convergence once confidence is high
-        if parsed["confidence"] >= CONFIDENCE_LOCK_THRESHOLD:
-            if parsed["action"] == "ASK":
-                parsed["action"] = (
-                    "DIY" if parsed["severity"] < 0.7 else "ESCALATE"
-                )
-                parsed["follow_up_questions"] = []
-
-        # 📺 Auto-inject YouTube tutorials for DIY when confident
-        if (
-            parsed["action"] == "DIY"
-            and parsed["confidence"] >= CONFIDENCE_LOCK_THRESHOLD
-            and not parsed["youtube_urls"]
-        ):
-            yt_results = web_search_youtube(parsed["diagnosis"])
-            parsed["youtube_urls"] = yt_results.splitlines()
+        # 📺 Inject YouTube ONLY when DIY + steps exist
+        if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
+            parsed["youtube_urls"] = web_search_youtube(parsed["diagnosis"])
 
         return parsed
 
