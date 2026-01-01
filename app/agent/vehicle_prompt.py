@@ -90,7 +90,7 @@ OUTPUT RULES (STRICT)
 - No extra text
 
 JSON format:
-{
+{{
   "diagnosis": "string",
   "explanation": "string",
   "severity": number,
@@ -99,7 +99,7 @@ JSON format:
   "follow_up_questions": ["string"],
   "youtube_urls": ["string"],
   "confidence": number
-}
+}}
 
 Rules:
 - steps empty unless action = DIY

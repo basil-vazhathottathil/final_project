@@ -16,6 +16,13 @@ if not GROQ_API_KEY:
 
 
 # -----------------------------
+# Constants
+# -----------------------------
+
+CONFIDENCE_LOCK_THRESHOLD = 0.75
+
+
+# -----------------------------
 # LLM setup
 # -----------------------------
 
@@ -39,6 +46,7 @@ User issue:
         ),
     ]
 )
+
 
 # -----------------------------
 # Web search setup
@@ -126,11 +134,12 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
+    resp.setdefault("youtube_urls", [])
 
     if resp["action"] == "ASK":
         resp["steps"] = []
         resp["follow_up_questions"] = remove_duplicate_questions(
-            resp["follow_up_questions"][:2],
+            resp["follow_up_questions"],
             history
         )
     else:
@@ -138,6 +147,7 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
     if resp["action"] != "DIY":
         resp["steps"] = []
+        resp["youtube_urls"] = []
 
     resp.setdefault("severity", 0.7)
     resp.setdefault("confidence", 0.5)
@@ -195,7 +205,26 @@ def run_vehicle_agent(
 
     try:
         parsed = json.loads(ai_text)
-        return normalize_agent_response(parsed, history)
+        parsed = normalize_agent_response(parsed, history)
+
+        # 🔒 Enforce convergence once confidence is high
+        if parsed["confidence"] >= CONFIDENCE_LOCK_THRESHOLD:
+            if parsed["action"] == "ASK":
+                parsed["action"] = (
+                    "DIY" if parsed["severity"] < 0.7 else "ESCALATE"
+                )
+                parsed["follow_up_questions"] = []
+
+        # 📺 Auto-inject YouTube tutorials for DIY when confident
+        if (
+            parsed["action"] == "DIY"
+            and parsed["confidence"] >= CONFIDENCE_LOCK_THRESHOLD
+            and not parsed["youtube_urls"]
+        ):
+            yt_results = web_search_youtube(parsed["diagnosis"])
+            parsed["youtube_urls"] = yt_results.splitlines()
+
+        return parsed
 
     except json.JSONDecodeError:
         return {
@@ -205,5 +234,6 @@ def run_vehicle_agent(
             "action": "ESCALATE",
             "steps": [],
             "follow_up_questions": [],
+            "youtube_urls": [],
             "confidence": 0.2,
         }
