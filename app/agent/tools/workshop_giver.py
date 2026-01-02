@@ -1,6 +1,6 @@
 import os
 import requests
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 
 GOOGLE_MAPS_KEY = os.getenv("GOOGLE_MAPS_KEY")
 

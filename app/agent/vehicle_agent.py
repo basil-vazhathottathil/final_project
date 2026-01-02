@@ -15,10 +15,6 @@ from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
 
 
-# -----------------------------
-# Configuration
-# -----------------------------
-
 WEB_SEARCH_CONFIDENCE_THRESHOLD = 0.65
 RAW_QUERY_CONFIDENCE_THRESHOLD = 0.35
 DIY_CONFIDENCE_MIN = 0.7
@@ -29,20 +25,11 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
     "Does it happen all the time or only in certain situations?",
 ]
 
-ALLOWED_ACTIONS = {
-    "DIY",
-    "ASK",
-    "ESCALATE",
-    "FIND_WORKSHOPS",
-}
+ALLOWED_ACTIONS = {"DIY", "ASK", "ESCALATE", "FIND_WORKSHOPS"}
 
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not set")
 
-
-# -----------------------------
-# LLM + Tools setup
-# -----------------------------
 
 tools = get_tools()
 
@@ -57,57 +44,29 @@ prompt = ChatPromptTemplate.from_messages(
         ("system", vehicle_prompt),
         (
             "human",
-            """Conversation history:
-{conversation_history}
-
-User issue:
-{user_input}
-"""
+            "Conversation history:\n{conversation_history}\n\nUser issue:\n{user_input}",
         ),
     ]
 )
-
-
-# -----------------------------
-# Web search (safe)
-# -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 
 def web_search_possible_causes(query: str) -> List[str]:
     try:
-        response = tavily.search(
-            query=f"car {query} causes",
-            max_results=5,
-        )
-        return [
-            r.get("content", "").strip()
-            for r in response.get("results", [])
-            if r.get("content")
-        ]
+        r = tavily.search(query=f"car {query} causes", max_results=5)
+        return [x.get("content", "").strip() for x in r.get("results", []) if x.get("content")]
     except Exception:
         return []
 
 
 def web_search_from_raw_query(query: str) -> List[str]:
     try:
-        response = tavily.search(
-            query=f"car problem {query}",
-            max_results=5,
-        )
-        return [
-            r.get("content", "").strip()
-            for r in response.get("results", [])
-            if r.get("content")
-        ]
+        r = tavily.search(query=f"car problem {query}", max_results=5)
+        return [x.get("content", "").strip() for x in r.get("results", []) if x.get("content")]
     except Exception:
         return []
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
 
 def extract_obd_codes(text: str) -> List[str]:
     return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
@@ -136,10 +95,6 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
     return resp
 
 
-# -----------------------------
-# OBD logic
-# -----------------------------
-
 def apply_obd_logic(resp: dict, user_input: str) -> dict:
     codes = extract_obd_codes(user_input)
     if not codes:
@@ -163,56 +118,46 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
     return resp
 
 
-# -----------------------------
-# Symptom guard
-# -----------------------------
-
 def apply_symptom_guard(resp: dict, user_input: str) -> Tuple[dict, bool]:
     text = user_input.lower()
-
-    for symptom in SYMPTOM_GUARDS.values():
-        if any(k in text for k in symptom["keywords"]):
-            resp["diagnosis"] = symptom["diagnosis"]
-            resp["explanation"] = symptom["explanation"]
-            resp["follow_up_questions"] = symptom["questions"]
-            resp["confidence"] = max(resp.get("confidence", 0.3), symptom["confidence"])
+    for s in SYMPTOM_GUARDS.values():
+        if any(k in text for k in s["keywords"]):
+            resp["diagnosis"] = s["diagnosis"]
+            resp["explanation"] = s["explanation"]
+            resp["follow_up_questions"] = s["questions"]
+            resp["confidence"] = max(resp.get("confidence", 0.3), s["confidence"])
             resp["action"] = "ASK"
             return resp, True
-
     return resp, False
 
-
-# -----------------------------
-# Web enrichment
-# -----------------------------
 
 def enrich_with_snippets(resp: dict, snippets: List[str]) -> dict:
     if not snippets:
         return resp
-
     resp["explanation"] += "\n\nPossible causes seen in real-world cases:\n"
     for s in snippets[:4]:
         resp["explanation"] += f"- {s}\n"
-
     resp["confidence"] = max(resp.get("confidence", 0.4), 0.6)
     return resp
 
-
-# -----------------------------
-# Main agent entry
-# -----------------------------
 
 def run_vehicle_agent(
     user_input: str,
     chat_id: UUID,
     user_id: str,
     vehicle_id: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> dict:
 
     history = load_short_term_memory(chat_id, limit=5) or ""
 
+    location_context = ""
+    if latitude is not None and longitude is not None:
+        location_context = f"\nUser location:\nlatitude={latitude}\nlongitude={longitude}\n"
+
     messages = prompt.format_messages(
-        conversation_history=history,
+        conversation_history=history + location_context,
         user_input=user_input,
     )
 
@@ -220,74 +165,43 @@ def run_vehicle_agent(
         ai_text = llm.invoke(messages).content
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, ai_text)
 
-        parsed = json.loads(ai_text)
-        parsed = normalize_agent_response(parsed, history)
+        parsed = normalize_agent_response(json.loads(ai_text), history)
 
-        # ----------------------------------
-        # Explicit workshop intent (early)
-        # ----------------------------------
-        workshop_intent = any(
-            k in user_input.lower()
-            for k in ["workshop", "garage", "mechanic", "service center"]
-        )
+        workshop_intent = any(k in user_input.lower() for k in ["workshop", "garage", "mechanic", "service center"])
 
         if workshop_intent:
-            parsed["action"] = "FIND_WORKSHOPS"
-            parsed["diagnosis"] = ""
-            parsed["severity"] = 0.0
+            if latitude is None or longitude is None:
+                parsed["action"] = "ASK"
+                parsed["follow_up_questions"] = ["Please allow location access so I can find nearby workshops."]
+            else:
+                parsed["action"] = "FIND_WORKSHOPS"
+                parsed["diagnosis"] = ""
+                parsed["severity"] = 0.0
             return normalize_agent_response(parsed, history)
 
-        # ----------------------------------
-        # Diagnosis pipeline
-        # ----------------------------------
         parsed = apply_obd_logic(parsed, user_input)
-        parsed, symptom_matched = apply_symptom_guard(parsed, user_input)
+        parsed, matched = apply_symptom_guard(parsed, user_input)
 
-        # Symptom-based web search
-        if (
-            symptom_matched
-            and parsed["action"] == "ASK"
-            and parsed["confidence"] < WEB_SEARCH_CONFIDENCE_THRESHOLD
-            and not extract_obd_codes(user_input)
-        ):
-            snippets = web_search_possible_causes(parsed["diagnosis"])
-            parsed = enrich_with_snippets(parsed, snippets)
+        if matched and parsed["action"] == "ASK" and parsed["confidence"] < WEB_SEARCH_CONFIDENCE_THRESHOLD:
+            parsed = enrich_with_snippets(parsed, web_search_possible_causes(parsed["diagnosis"]))
 
-        # Raw-query fallback
-        if (
-            not symptom_matched
-            and parsed["action"] == "ASK"
-            and parsed["confidence"] < RAW_QUERY_CONFIDENCE_THRESHOLD
-            and not extract_obd_codes(user_input)
-            and len(user_input.split()) >= 4
-        ):
-            snippets = web_search_from_raw_query(user_input)
+        if not matched and parsed["action"] == "ASK" and parsed["confidence"] < RAW_QUERY_CONFIDENCE_THRESHOLD:
             parsed["diagnosis"] = "Vehicle issue detected (needs clarification)"
-            parsed["explanation"] = (
-                "Based on similar real-world cases, possible causes include:"
-            )
-            parsed = enrich_with_snippets(parsed, snippets)
+            parsed["explanation"] = "Based on similar real-world cases, possible causes include:"
+            parsed = enrich_with_snippets(parsed, web_search_from_raw_query(user_input))
 
-        # ----------------------------------
-        # Confidence-based safety escalation
-        # ----------------------------------
         if parsed["action"] == "DIY" and parsed["confidence"] < DIY_CONFIDENCE_MIN:
             parsed["action"] = "ESCALATE"
             parsed["steps"] = []
             parsed["youtube_urls"] = []
-            parsed["explanation"] += (
-                "\n\nI’m not confident this can be safely fixed at home."
-            )
+            parsed["explanation"] += "\n\nI’m not confident this can be safely fixed at home."
 
         return normalize_agent_response(parsed, history)
 
     except Exception:
         return {
             "diagnosis": "Vehicle issue detected (needs clarification)",
-            "explanation": (
-                "I may not have understood everything correctly yet. "
-                "Let’s continue step by step to narrow this down."
-            ),
+            "explanation": "I may not have understood everything correctly yet. Let’s continue step by step.",
             "severity": 0.4,
             "action": "ASK",
             "steps": [],
