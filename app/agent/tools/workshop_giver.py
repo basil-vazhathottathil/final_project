@@ -8,6 +8,9 @@ PLACES_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
 
 def _find_nearby_workshops(lat: float, lng: float) -> str:
+    if lat is None or lng is None:
+        return "Please share your city or area so I can find nearby workshops."
+
     params = {
         "location": f"{lat},{lng}",
         "radius": 5000,
@@ -39,8 +42,7 @@ def get_workshop_tool():
         name="find_nearby_workshops",
         func=_find_nearby_workshops,
         description=(
-            "Use this tool to find nearby car repair workshops, garages, "
-            "service centers, or mechanics when the user asks for them. "
-            "Requires latitude and longitude."
+            "Find nearby car repair workshops, garages, or service centers "
+            "using Google Maps. Requires latitude and longitude."
         ),
     )

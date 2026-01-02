@@ -10,6 +10,7 @@ from tavily import TavilyClient
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.agent.vehicle_symptom import SYMPTOM_GUARDS
+from app.agent.tools import get_tools
 from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
 
@@ -20,6 +21,7 @@ from app.data import OBD_CODES
 
 WEB_SEARCH_CONFIDENCE_THRESHOLD = 0.65
 RAW_QUERY_CONFIDENCE_THRESHOLD = 0.35
+DIY_CONFIDENCE_MIN = 0.7
 
 GENERIC_FOLLOW_UP_QUESTIONS = [
     "Can you describe the issue in your own words?",
@@ -27,20 +29,28 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
     "Does it happen all the time or only in certain situations?",
 ]
 
+ALLOWED_ACTIONS = {
+    "DIY",
+    "ASK",
+    "ESCALATE",
+    "FIND_WORKSHOPS",
+}
 
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not set")
 
 
 # -----------------------------
-# LLM setup
+# LLM + Tools setup
 # -----------------------------
+
+tools = get_tools()
 
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model="llama-3.1-8b-instant",
     temperature=0.2,
-)
+).bind_tools(tools)
 
 prompt = ChatPromptTemplate.from_messages(
     [
@@ -59,7 +69,7 @@ User issue:
 
 
 # -----------------------------
-# Web search setup (SAFE)
+# Web search (safe)
 # -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -112,6 +122,9 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
     resp.setdefault("follow_up_questions", [])
     resp.setdefault("youtube_urls", [])
     resp.setdefault("confidence", 0.5)
+
+    if resp["action"] not in ALLOWED_ACTIONS:
+        resp["action"] = "ASK"
 
     if resp["action"] == "ASK" and not resp["follow_up_questions"]:
         resp["follow_up_questions"] = GENERIC_FOLLOW_UP_QUESTIONS
@@ -208,12 +221,29 @@ def run_vehicle_agent(
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, ai_text)
 
         parsed = json.loads(ai_text)
-
         parsed = normalize_agent_response(parsed, history)
+
+        # ----------------------------------
+        # Explicit workshop intent (early)
+        # ----------------------------------
+        workshop_intent = any(
+            k in user_input.lower()
+            for k in ["workshop", "garage", "mechanic", "service center"]
+        )
+
+        if workshop_intent:
+            parsed["action"] = "FIND_WORKSHOPS"
+            parsed["diagnosis"] = ""
+            parsed["severity"] = 0.0
+            return normalize_agent_response(parsed, history)
+
+        # ----------------------------------
+        # Diagnosis pipeline
+        # ----------------------------------
         parsed = apply_obd_logic(parsed, user_input)
         parsed, symptom_matched = apply_symptom_guard(parsed, user_input)
 
-        # 🔍 Symptom-based web search
+        # Symptom-based web search
         if (
             symptom_matched
             and parsed["action"] == "ASK"
@@ -223,7 +253,7 @@ def run_vehicle_agent(
             snippets = web_search_possible_causes(parsed["diagnosis"])
             parsed = enrich_with_snippets(parsed, snippets)
 
-        # 🌐 Raw-query fallback search
+        # Raw-query fallback
         if (
             not symptom_matched
             and parsed["action"] == "ASK"
@@ -238,10 +268,20 @@ def run_vehicle_agent(
             )
             parsed = enrich_with_snippets(parsed, snippets)
 
+        # ----------------------------------
+        # Confidence-based safety escalation
+        # ----------------------------------
+        if parsed["action"] == "DIY" and parsed["confidence"] < DIY_CONFIDENCE_MIN:
+            parsed["action"] = "ESCALATE"
+            parsed["steps"] = []
+            parsed["youtube_urls"] = []
+            parsed["explanation"] += (
+                "\n\nI’m not confident this can be safely fixed at home."
+            )
+
         return normalize_agent_response(parsed, history)
 
     except Exception:
-        # 🛟 Generic recovery — no guessing, no hardcoding
         return {
             "diagnosis": "Vehicle issue detected (needs clarification)",
             "explanation": (
