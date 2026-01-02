@@ -1,7 +1,7 @@
 import json
 import re
 from uuid import UUID
-from typing import List
+from typing import List, Tuple
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -12,6 +12,20 @@ from app.agent.vehicle_prompt import vehicle_prompt
 from app.agent.vehicle_symptom import SYMPTOM_GUARDS
 from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
+
+
+# -----------------------------
+# Configuration
+# -----------------------------
+
+WEB_SEARCH_CONFIDENCE_THRESHOLD = 0.65
+RAW_QUERY_CONFIDENCE_THRESHOLD = 0.35
+
+GENERIC_FOLLOW_UP_QUESTIONS = [
+    "Can you describe the issue in your own words?",
+    "When did you first notice this?",
+    "Does it happen all the time or only in certain situations?",
+]
 
 
 if not GROQ_API_KEY:
@@ -45,18 +59,40 @@ User issue:
 
 
 # -----------------------------
-# Web search setup
+# Web search setup (SAFE)
 # -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 
-def web_search_youtube(query: str) -> List[str]:
-    response = tavily.search(
-        query=f"site:youtube.com {query}",
-        max_results=5,
-    )
-    return [r["url"] for r in response.get("results", []) if "url" in r]
+def web_search_possible_causes(query: str) -> List[str]:
+    try:
+        response = tavily.search(
+            query=f"car {query} causes",
+            max_results=5,
+        )
+        return [
+            r.get("content", "").strip()
+            for r in response.get("results", [])
+            if r.get("content")
+        ]
+    except Exception:
+        return []
+
+
+def web_search_from_raw_query(query: str) -> List[str]:
+    try:
+        response = tavily.search(
+            query=f"car problem {query}",
+            max_results=5,
+        )
+        return [
+            r.get("content", "").strip()
+            for r in response.get("results", [])
+            if r.get("content")
+        ]
+    except Exception:
+        return []
 
 
 # -----------------------------
@@ -67,35 +103,18 @@ def extract_obd_codes(text: str) -> List[str]:
     return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
 
 
-def remove_duplicate_questions(questions: List[str], history: str) -> List[str]:
-    return [q for q in questions if q.lower() not in history.lower()]
-
-
 def normalize_agent_response(resp: dict, history: str) -> dict:
-    action = resp.get("action", "ASK")
-
-    if action not in {"DIY", "ASK", "ESCALATE"}:
-        resp["action"] = "ASK"
-
+    resp.setdefault("diagnosis", "")
+    resp.setdefault("explanation", "")
+    resp.setdefault("severity", 0.5)
+    resp.setdefault("action", "ASK")
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
     resp.setdefault("youtube_urls", [])
-    resp.setdefault("severity", 0.5)
     resp.setdefault("confidence", 0.5)
 
-    if resp["action"] == "ASK":
-        resp["steps"] = []
-        resp["youtube_urls"] = []
-        resp["follow_up_questions"] = remove_duplicate_questions(
-            resp["follow_up_questions"], history
-        )
-
-        if not resp["follow_up_questions"]:
-            resp["follow_up_questions"] = [
-                "Can you describe what the car is doing right now?",
-                "Are there any warning lights on the dashboard?",
-                "Does this happen while starting, idling, or driving?",
-            ]
+    if resp["action"] == "ASK" and not resp["follow_up_questions"]:
+        resp["follow_up_questions"] = GENERIC_FOLLOW_UP_QUESTIONS
 
     if resp["action"] != "DIY":
         resp["steps"] = []
@@ -105,7 +124,7 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
 
 # -----------------------------
-# OBD logic (facts layer)
+# OBD logic
 # -----------------------------
 
 def apply_obd_logic(resp: dict, user_input: str) -> dict:
@@ -113,77 +132,61 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
     if not codes:
         return resp
 
-    code = codes[0]
-    obd = OBD_CODES.get(code)
+    obd = OBD_CODES.get(codes[0])
     if not obd:
         return resp
 
-    resp["diagnosis"] = f"{code}: {obd['meaning']}"
+    resp["diagnosis"] = f"{codes[0]}: {obd['meaning']}"
     resp["explanation"] = obd["description"]
 
-    # 🚨 Safety-critical → hard ESCALATE
     if not obd["diy_possible"]:
         resp["action"] = "ESCALATE"
-        resp["steps"] = []
-        resp["follow_up_questions"] = []
-        resp["youtube_urls"] = []
-        resp["confidence"] = max(resp.get("confidence", 0.5), 0.8)
+        resp["confidence"] = 0.9
         return resp
 
-    # 🧠 Multi-cause → ASK
     if obd["multi_cause"]:
         resp["action"] = "ASK"
-        resp["steps"] = []
-        resp["youtube_urls"] = []
 
     return resp
 
 
 # -----------------------------
-# Symptom guard (understanding layer)
+# Symptom guard
 # -----------------------------
 
-def apply_symptom_guard(resp: dict, user_input: str) -> dict:
+def apply_symptom_guard(resp: dict, user_input: str) -> Tuple[dict, bool]:
     text = user_input.lower()
 
     for symptom in SYMPTOM_GUARDS.values():
         if any(k in text for k in symptom["keywords"]):
             resp["diagnosis"] = symptom["diagnosis"]
             resp["explanation"] = symptom["explanation"]
-            resp["action"] = "ASK"
-            resp["steps"] = []
-            resp["youtube_urls"] = []
             resp["follow_up_questions"] = symptom["questions"]
-            resp["confidence"] = max(
-                resp.get("confidence", 0.3),
-                symptom["confidence"]
-            )
-            return resp
+            resp["confidence"] = max(resp.get("confidence", 0.3), symptom["confidence"])
+            resp["action"] = "ASK"
+            return resp, True
 
+    return resp, False
+
+
+# -----------------------------
+# Web enrichment
+# -----------------------------
+
+def enrich_with_snippets(resp: dict, snippets: List[str]) -> dict:
+    if not snippets:
+        return resp
+
+    resp["explanation"] += "\n\nPossible causes seen in real-world cases:\n"
+    for s in snippets[:4]:
+        resp["explanation"] += f"- {s}\n"
+
+    resp["confidence"] = max(resp.get("confidence", 0.4), 0.6)
     return resp
 
 
 # -----------------------------
-# State enforcement
-# -----------------------------
-
-def enforce_state_machine(resp: dict) -> dict:
-    if resp["action"] == "DIY" and not resp["steps"]:
-        resp["action"] = "ASK"
-        resp["steps"] = []
-        resp["youtube_urls"] = []
-
-        if not resp.get("follow_up_questions"):
-            resp["follow_up_questions"] = [
-                "Can you share any other symptoms you notice?",
-                "Does the issue happen all the time or only sometimes?",
-            ]
-
-    return resp
-
-
-# -----------------------------
-# Main entry point
+# Main agent entry
 # -----------------------------
 
 def run_vehicle_agent(
@@ -193,7 +196,7 @@ def run_vehicle_agent(
     vehicle_id: str | None = None,
 ) -> dict:
 
-    history = load_short_term_memory(chat_id, limit=5) or "No prior conversation."
+    history = load_short_term_memory(chat_id, limit=5) or ""
 
     messages = prompt.format_messages(
         conversation_history=history,
@@ -202,52 +205,53 @@ def run_vehicle_agent(
 
     try:
         ai_text = llm.invoke(messages).content
-
-        save_chat_turn(
-            chat_id=chat_id,
-            user_id=user_id,
-            vehicle_id=vehicle_id,
-            prompt=user_input,
-            response_ai=ai_text,
-        )
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, ai_text)
 
         parsed = json.loads(ai_text)
 
         parsed = normalize_agent_response(parsed, history)
-        parsed = apply_obd_logic(parsed, user_input)      # facts
-        parsed = apply_symptom_guard(parsed, user_input) # symptoms
-        parsed = enforce_state_machine(parsed)
+        parsed = apply_obd_logic(parsed, user_input)
+        parsed, symptom_matched = apply_symptom_guard(parsed, user_input)
 
-        # 🛑 Never block conversation due to understanding failure
-        if parsed["action"] == "ESCALATE" and parsed.get("confidence", 1) < 0.4:
-            parsed["action"] = "ASK"
-            parsed["steps"] = []
-            parsed["youtube_urls"] = []
-            parsed["follow_up_questions"] = [
-                "Can you explain the issue in a bit more detail?",
-                "When did this problem first start?",
-                "Is the car still drivable right now?",
-            ]
+        # 🔍 Symptom-based web search
+        if (
+            symptom_matched
+            and parsed["action"] == "ASK"
+            and parsed["confidence"] < WEB_SEARCH_CONFIDENCE_THRESHOLD
+            and not extract_obd_codes(user_input)
+        ):
+            snippets = web_search_possible_causes(parsed["diagnosis"])
+            parsed = enrich_with_snippets(parsed, snippets)
 
-        # 📺 YouTube ONLY when DIY + steps exist
-        if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
-            parsed["youtube_urls"] = web_search_youtube(parsed["diagnosis"])
+        # 🌐 Raw-query fallback search
+        if (
+            not symptom_matched
+            and parsed["action"] == "ASK"
+            and parsed["confidence"] < RAW_QUERY_CONFIDENCE_THRESHOLD
+            and not extract_obd_codes(user_input)
+            and len(user_input.split()) >= 4
+        ):
+            snippets = web_search_from_raw_query(user_input)
+            parsed["diagnosis"] = "Vehicle issue detected (needs clarification)"
+            parsed["explanation"] = (
+                "Based on similar real-world cases, possible causes include:"
+            )
+            parsed = enrich_with_snippets(parsed, snippets)
 
-        return parsed
+        return normalize_agent_response(parsed, history)
 
     except Exception:
-        # ⚠️ True understanding failure → ASK, never ESCALATE
+        # 🛟 Generic recovery — no guessing, no hardcoding
         return {
-            "diagnosis": "I couldn’t clearly understand the issue yet",
-            "explanation": "Let’s try again with a bit more detail so I can help you properly.",
-            "severity": 0.3,
+            "diagnosis": "Vehicle issue detected (needs clarification)",
+            "explanation": (
+                "I may not have understood everything correctly yet. "
+                "Let’s continue step by step to narrow this down."
+            ),
+            "severity": 0.4,
             "action": "ASK",
             "steps": [],
-            "follow_up_questions": [
-                "Can you describe what the car is doing right now?",
-                "Are there any warning lights on the dashboard?",
-                "Does this happen while starting, idling, or driving?",
-            ],
+            "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
-            "confidence": 0.3,
+            "confidence": 0.4,
         }
