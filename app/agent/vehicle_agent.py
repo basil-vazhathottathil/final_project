@@ -1,7 +1,7 @@
 import json
 import re
 from uuid import UUID
-from typing import List
+from typing import List, Tuple
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -9,8 +9,23 @@ from tavily import TavilyClient
 
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
+from app.agent.vehicle_symptom import SYMPTOM_GUARDS
 from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
+
+
+# -----------------------------
+# Configuration
+# -----------------------------
+
+WEB_SEARCH_CONFIDENCE_THRESHOLD = 0.65
+RAW_QUERY_CONFIDENCE_THRESHOLD = 0.35
+
+GENERIC_FOLLOW_UP_QUESTIONS = [
+    "Can you describe the issue in your own words?",
+    "When did you first notice this?",
+    "Does it happen all the time or only in certain situations?",
+]
 
 
 if not GROQ_API_KEY:
@@ -44,31 +59,40 @@ User issue:
 
 
 # -----------------------------
-# Web search setup
+# Web search setup (SAFE)
 # -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
-YOUTUBE_INTENT_KEYWORDS = [
-    "youtube",
-    "video",
-    "tutorial",
-    "how to",
-    "guide",
-    "watch",
-]
+
+def web_search_possible_causes(query: str) -> List[str]:
+    try:
+        response = tavily.search(
+            query=f"car {query} causes",
+            max_results=5,
+        )
+        return [
+            r.get("content", "").strip()
+            for r in response.get("results", [])
+            if r.get("content")
+        ]
+    except Exception:
+        return []
 
 
-def wants_youtube(text: str) -> bool:
-    return any(k in text.lower() for k in YOUTUBE_INTENT_KEYWORDS)
-
-
-def web_search_youtube(query: str) -> List[str]:
-    response = tavily.search(
-        query=f"site:youtube.com {query}",
-        max_results=5,
-    )
-    return [r["url"] for r in response.get("results", []) if "url" in r]
+def web_search_from_raw_query(query: str) -> List[str]:
+    try:
+        response = tavily.search(
+            query=f"car problem {query}",
+            max_results=5,
+        )
+        return [
+            r.get("content", "").strip()
+            for r in response.get("results", [])
+            if r.get("content")
+        ]
+    except Exception:
+        return []
 
 
 # -----------------------------
@@ -76,42 +100,21 @@ def web_search_youtube(query: str) -> List[str]:
 # -----------------------------
 
 def extract_obd_codes(text: str) -> List[str]:
-    """
-    Extract P / B / C / U OBD-II codes from text
-    """
     return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
 
 
-def remove_duplicate_questions(questions: List[str], history: str) -> List[str]:
-    return [q for q in questions if q.lower() not in history.lower()]
-
-
 def normalize_agent_response(resp: dict, history: str) -> dict:
-    action = resp.get("action", "ESCALATE")
-
-    if action not in {"DIY", "ASK", "ESCALATE"}:
-        resp["action"] = "ESCALATE"
-
+    resp.setdefault("diagnosis", "")
+    resp.setdefault("explanation", "")
+    resp.setdefault("severity", 0.5)
+    resp.setdefault("action", "ASK")
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", [])
     resp.setdefault("youtube_urls", [])
-    resp.setdefault("severity", 0.7)
     resp.setdefault("confidence", 0.5)
 
-    if resp["action"] == "ASK":
-        resp["steps"] = []
-        resp["youtube_urls"] = []
-        resp["follow_up_questions"] = remove_duplicate_questions(
-            resp["follow_up_questions"], history
-        )
-
-        # 🚨 ASK must always ask something
-        if not resp["follow_up_questions"]:
-            resp["follow_up_questions"] = [
-                "Does the engine idle smoothly or feel rough?",
-                "Do you hear any unusual hissing or air-leak sounds?",
-                "Has fuel consumption changed recently?",
-            ]
+    if resp["action"] == "ASK" and not resp["follow_up_questions"]:
+        resp["follow_up_questions"] = GENERIC_FOLLOW_UP_QUESTIONS
 
     if resp["action"] != "DIY":
         resp["steps"] = []
@@ -121,7 +124,7 @@ def normalize_agent_response(resp: dict, history: str) -> dict:
 
 
 # -----------------------------
-# OBD logic (DATA-DRIVEN)
+# OBD logic
 # -----------------------------
 
 def apply_obd_logic(resp: dict, user_input: str) -> dict:
@@ -129,61 +132,61 @@ def apply_obd_logic(resp: dict, user_input: str) -> dict:
     if not codes:
         return resp
 
-    code = codes[0]
-    obd = OBD_CODES.get(code)
+    obd = OBD_CODES.get(codes[0])
     if not obd:
         return resp
 
-    # 🔒 Deterministic diagnosis
-    resp["diagnosis"] = f"{code}: {obd['meaning']}"
+    resp["diagnosis"] = f"{codes[0]}: {obd['meaning']}"
     resp["explanation"] = obd["description"]
 
-    # 🚨 Safety first
     if not obd["diy_possible"]:
         resp["action"] = "ESCALATE"
-        resp["steps"] = []
-        resp["follow_up_questions"] = []
-        resp["youtube_urls"] = []
+        resp["confidence"] = 0.9
         return resp
 
-    # 🧠 Multi-cause → ASK
     if obd["multi_cause"]:
         resp["action"] = "ASK"
-        resp["steps"] = []
-        resp["youtube_urls"] = []
-
-        if not resp.get("follow_up_questions"):
-            resp["follow_up_questions"] = [
-                "Does the engine idle smoothly or feel rough?",
-                "Do you hear any hissing sounds from the engine bay?",
-                "Did this issue start suddenly or gradually?",
-            ]
 
     return resp
 
 
 # -----------------------------
-# State enforcement
+# Symptom guard
 # -----------------------------
 
-def enforce_state_machine(resp: dict) -> dict:
-    # 🚫 DIY without steps is forbidden
-    if resp["action"] == "DIY" and not resp["steps"]:
-        resp["action"] = "ASK"
-        resp["steps"] = []
-        resp["youtube_urls"] = []
+def apply_symptom_guard(resp: dict, user_input: str) -> Tuple[dict, bool]:
+    text = user_input.lower()
 
-        if not resp["follow_up_questions"]:
-            resp["follow_up_questions"] = [
-                "Can you describe any other symptoms you notice?",
-                "Does the issue happen all the time or only sometimes?",
-            ]
+    for symptom in SYMPTOM_GUARDS.values():
+        if any(k in text for k in symptom["keywords"]):
+            resp["diagnosis"] = symptom["diagnosis"]
+            resp["explanation"] = symptom["explanation"]
+            resp["follow_up_questions"] = symptom["questions"]
+            resp["confidence"] = max(resp.get("confidence", 0.3), symptom["confidence"])
+            resp["action"] = "ASK"
+            return resp, True
 
+    return resp, False
+
+
+# -----------------------------
+# Web enrichment
+# -----------------------------
+
+def enrich_with_snippets(resp: dict, snippets: List[str]) -> dict:
+    if not snippets:
+        return resp
+
+    resp["explanation"] += "\n\nPossible causes seen in real-world cases:\n"
+    for s in snippets[:4]:
+        resp["explanation"] += f"- {s}\n"
+
+    resp["confidence"] = max(resp.get("confidence", 0.4), 0.6)
     return resp
 
 
 # -----------------------------
-# Main entry point
+# Main agent entry
 # -----------------------------
 
 def run_vehicle_agent(
@@ -193,44 +196,62 @@ def run_vehicle_agent(
     vehicle_id: str | None = None,
 ) -> dict:
 
-    history = load_short_term_memory(chat_id, limit=5) or "No prior conversation."
+    history = load_short_term_memory(chat_id, limit=5) or ""
 
     messages = prompt.format_messages(
         conversation_history=history,
         user_input=user_input,
     )
 
-    ai_text = llm.invoke(messages).content
-
-    save_chat_turn(
-        chat_id=chat_id,
-        user_id=user_id,
-        vehicle_id=vehicle_id,
-        prompt=user_input,
-        response_ai=ai_text,
-    )
-
     try:
+        ai_text = llm.invoke(messages).content
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, ai_text)
+
         parsed = json.loads(ai_text)
 
         parsed = normalize_agent_response(parsed, history)
         parsed = apply_obd_logic(parsed, user_input)
-        parsed = enforce_state_machine(parsed)
+        parsed, symptom_matched = apply_symptom_guard(parsed, user_input)
 
-        # 📺 YouTube ONLY when DIY + steps exist
-        if parsed["action"] == "DIY" and parsed["steps"] and not parsed["youtube_urls"]:
-            parsed["youtube_urls"] = web_search_youtube(parsed["diagnosis"])
+        # 🔍 Symptom-based web search
+        if (
+            symptom_matched
+            and parsed["action"] == "ASK"
+            and parsed["confidence"] < WEB_SEARCH_CONFIDENCE_THRESHOLD
+            and not extract_obd_codes(user_input)
+        ):
+            snippets = web_search_possible_causes(parsed["diagnosis"])
+            parsed = enrich_with_snippets(parsed, snippets)
 
-        return parsed
+        # 🌐 Raw-query fallback search
+        if (
+            not symptom_matched
+            and parsed["action"] == "ASK"
+            and parsed["confidence"] < RAW_QUERY_CONFIDENCE_THRESHOLD
+            and not extract_obd_codes(user_input)
+            and len(user_input.split()) >= 4
+        ):
+            snippets = web_search_from_raw_query(user_input)
+            parsed["diagnosis"] = "Vehicle issue detected (needs clarification)"
+            parsed["explanation"] = (
+                "Based on similar real-world cases, possible causes include:"
+            )
+            parsed = enrich_with_snippets(parsed, snippets)
+
+        return normalize_agent_response(parsed, history)
 
     except Exception:
+        # 🛟 Generic recovery — no guessing, no hardcoding
         return {
-            "diagnosis": "Unable to safely identify the issue",
-            "explanation": "I could not clearly understand the problem.",
-            "severity": 0.8,
-            "action": "ESCALATE",
+            "diagnosis": "Vehicle issue detected (needs clarification)",
+            "explanation": (
+                "I may not have understood everything correctly yet. "
+                "Let’s continue step by step to narrow this down."
+            ),
+            "severity": 0.4,
+            "action": "ASK",
             "steps": [],
-            "follow_up_questions": [],
+            "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
-            "confidence": 0.2,
+            "confidence": 0.4,
         }
