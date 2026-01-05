@@ -27,7 +27,6 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
     "Does it happen all the time or only in certain situations?",
 ]
 
-
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not set")
 
@@ -59,7 +58,7 @@ User issue:
 
 
 # -----------------------------
-# Web search setup (SAFE)
+# Web search setup
 # -----------------------------
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -194,6 +193,8 @@ def run_vehicle_agent(
     chat_id: UUID,
     user_id: str,
     vehicle_id: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> dict:
 
     history = load_short_term_memory(chat_id, limit=5) or ""
@@ -241,7 +242,6 @@ def run_vehicle_agent(
         return normalize_agent_response(parsed, history)
 
     except Exception:
-        # 🛟 Generic recovery — no guessing, no hardcoding
         return {
             "diagnosis": "Vehicle issue detected (needs clarification)",
             "explanation": (
