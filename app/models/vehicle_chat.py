@@ -7,6 +7,8 @@ class ChatRequest(BaseModel):
     chat_id: UUID                 # session id
     message: str                  # user message
     vehicle_id: Optional[str] = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class AgentResponse(BaseModel):
