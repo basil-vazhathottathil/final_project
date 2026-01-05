@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends
-from fastapi.security import HTTPBearer
+from fastapi import APIRouter, Depends # type: ignore
+from fastapi.security import HTTPBearer # type: ignore
 
 from app.agent.vehicle_agent import run_vehicle_agent
 from app.auth.auth import verify_token

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI # type: ignore
 
 from app.routers import vehicle_chat, vehicle_workshops
 

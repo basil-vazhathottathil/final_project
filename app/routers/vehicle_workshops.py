@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, Query
-from fastapi.security import HTTPBearer
+from fastapi import APIRouter, Depends, Query # type: ignore
+from fastapi.security import HTTPBearer # type: ignore
 
 from app.auth.auth import verify_token
 from app.agent.services.workshop_giver import get_workshop_tool
