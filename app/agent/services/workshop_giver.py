@@ -90,9 +90,9 @@ def _find_nearby_workshops(input: dict) -> dict:
         res = requests.get(PLACES_URL, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
-        print("GOOGLE_MAPS_KEY LOADED:", bool(GOOGLE_MAPS_KEY))
-        print("PLACES REQUEST PARAMS:", params)
-        print("PLACES RAW RESPONSE:", data)
+        # print("GOOGLE_MAPS_KEY LOADED:", bool(GOOGLE_MAPS_KEY))
+        # print("PLACES REQUEST PARAMS:", params)
+        # print("PLACES RAW RESPONSE:", data)
 
 
         results = data.get("results", [])
