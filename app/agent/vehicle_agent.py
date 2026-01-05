@@ -5,9 +5,8 @@ from typing import List, Tuple
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from tavily import TavilyClient
 
-from app.config import GROQ_API_KEY, TAVILY_API_KEY
+from app.config import GROQ_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.agent.vehicle_symptom import SYMPTOM_GUARDS
 from app.agent.tools import get_tools
@@ -15,8 +14,6 @@ from app.db.db import load_short_term_memory, save_chat_turn
 from app.data import OBD_CODES
 
 
-WEB_SEARCH_CONFIDENCE_THRESHOLD = 0.65
-RAW_QUERY_CONFIDENCE_THRESHOLD = 0.35
 DIY_CONFIDENCE_MIN = 0.7
 
 GENERIC_FOLLOW_UP_QUESTIONS = [
@@ -26,9 +23,6 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
 ]
 
 ALLOWED_ACTIONS = {"DIY", "ASK", "ESCALATE", "FIND_WORKSHOPS"}
-
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY not set")
 
 
 tools = get_tools()
@@ -49,30 +43,12 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
-
-def web_search_possible_causes(query: str) -> List[str]:
-    try:
-        r = tavily.search(query=f"car {query} causes", max_results=5)
-        return [x.get("content", "").strip() for x in r.get("results", []) if x.get("content")]
-    except Exception:
-        return []
-
-
-def web_search_from_raw_query(query: str) -> List[str]:
-    try:
-        r = tavily.search(query=f"car problem {query}", max_results=5)
-        return [x.get("content", "").strip() for x in r.get("results", []) if x.get("content")]
-    except Exception:
-        return []
-
 
 def extract_obd_codes(text: str) -> List[str]:
     return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
 
 
-def normalize_agent_response(resp: dict, history: str) -> dict:
+def normalize_agent_response(resp: dict) -> dict:
     resp.setdefault("diagnosis", "")
     resp.setdefault("explanation", "")
     resp.setdefault("severity", 0.5)
@@ -131,16 +107,6 @@ def apply_symptom_guard(resp: dict, user_input: str) -> Tuple[dict, bool]:
     return resp, False
 
 
-def enrich_with_snippets(resp: dict, snippets: List[str]) -> dict:
-    if not snippets:
-        return resp
-    resp["explanation"] += "\n\nPossible causes seen in real-world cases:\n"
-    for s in snippets[:4]:
-        resp["explanation"] += f"- {s}\n"
-    resp["confidence"] = max(resp.get("confidence", 0.4), 0.6)
-    return resp
-
-
 def run_vehicle_agent(
     user_input: str,
     chat_id: UUID,
@@ -154,7 +120,9 @@ def run_vehicle_agent(
 
     location_context = ""
     if latitude is not None and longitude is not None:
-        location_context = f"\nUser location:\nlatitude={latitude}\nlongitude={longitude}\n"
+        location_context = (
+            f"\nUser location:\nlatitude={latitude}\nlongitude={longitude}\n"
+        )
 
     messages = prompt.format_messages(
         conversation_history=history + location_context,
@@ -162,41 +130,57 @@ def run_vehicle_agent(
     )
 
     try:
-        ai_text = llm.invoke(messages).content
+        ai_msg = llm.invoke(messages)
+
+        tool_calls = getattr(ai_msg, "additional_kwargs", {}).get("tool_calls", [])
+
+        if tool_calls:
+            tool_output = ai_msg.content or ""
+            save_chat_turn(chat_id, user_id, vehicle_id, user_input, tool_output)
+            return normalize_agent_response(
+                {
+                    "diagnosis": "",
+                    "explanation": tool_output,
+                    "severity": 0.0,
+                    "action": "FIND_WORKSHOPS",
+                    "confidence": 0.6,
+                }
+            )
+
+        ai_text = ai_msg.content
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, ai_text)
 
-        parsed = normalize_agent_response(json.loads(ai_text), history)
+        parsed = normalize_agent_response(json.loads(ai_text))
 
-        workshop_intent = any(k in user_input.lower() for k in ["workshop", "garage", "mechanic", "service center"])
+        workshop_intent = any(
+            k in user_input.lower()
+            for k in ["workshop", "garage", "mechanic", "service center"]
+        )
 
         if workshop_intent:
             if latitude is None or longitude is None:
                 parsed["action"] = "ASK"
-                parsed["follow_up_questions"] = ["Please allow location access so I can find nearby workshops."]
+                parsed["follow_up_questions"] = [
+                    "Please allow location access so I can find nearby workshops."
+                ]
             else:
                 parsed["action"] = "FIND_WORKSHOPS"
-                parsed["diagnosis"] = ""
                 parsed["severity"] = 0.0
-            return normalize_agent_response(parsed, history)
+                parsed["diagnosis"] = ""
+            return normalize_agent_response(parsed)
 
         parsed = apply_obd_logic(parsed, user_input)
-        parsed, matched = apply_symptom_guard(parsed, user_input)
-
-        if matched and parsed["action"] == "ASK" and parsed["confidence"] < WEB_SEARCH_CONFIDENCE_THRESHOLD:
-            parsed = enrich_with_snippets(parsed, web_search_possible_causes(parsed["diagnosis"]))
-
-        if not matched and parsed["action"] == "ASK" and parsed["confidence"] < RAW_QUERY_CONFIDENCE_THRESHOLD:
-            parsed["diagnosis"] = "Vehicle issue detected (needs clarification)"
-            parsed["explanation"] = "Based on similar real-world cases, possible causes include:"
-            parsed = enrich_with_snippets(parsed, web_search_from_raw_query(user_input))
+        parsed, _ = apply_symptom_guard(parsed, user_input)
 
         if parsed["action"] == "DIY" and parsed["confidence"] < DIY_CONFIDENCE_MIN:
             parsed["action"] = "ESCALATE"
             parsed["steps"] = []
             parsed["youtube_urls"] = []
-            parsed["explanation"] += "\n\nI’m not confident this can be safely fixed at home."
+            parsed["explanation"] += (
+                "\n\nI’m not confident this can be safely fixed at home."
+            )
 
-        return normalize_agent_response(parsed, history)
+        return normalize_agent_response(parsed)
 
     except Exception:
         return {

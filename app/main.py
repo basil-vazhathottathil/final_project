@@ -33,5 +33,7 @@ async def chat_vehicle(
         user_input=req.message,
         chat_id=req.chat_id,
         user_id=user["sub"],
-        vehicle_id=req.vehicle_id
+        vehicle_id=req.vehicle_id,
+        latitude=req.latitude,
+        longitude=req.longitude,
     )
