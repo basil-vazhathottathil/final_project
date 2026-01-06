@@ -1,8 +1,8 @@
 import requests
 from typing import List
 
-from langchain_core.tools import Tool
-from tavily import TavilyClient
+from langchain_core.tools import Tool # type: ignore
+from tavily import TavilyClient # type: ignore
 
 from app.config import GOOGLE_MAPS_KEY, TAVILY_API_KEY
 

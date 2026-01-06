@@ -1,219 +1,173 @@
-"""
-Symptom recognition layer.
-
-Purpose:
-- Detect real-world vehicle symptoms from user text
-- Prevent generic 'I didn’t understand' fallbacks
-- Force diagnostic ASK behavior when a valid symptom is present
-"""
+# Deterministic symptom guards for vehicle diagnostics
+# These guards provide safety + continuity across turns
 
 SYMPTOM_GUARDS = {
-    # -----------------------------
-    # ENGINE & MECHANICAL SOUNDS
-    # -----------------------------
+
+    # --------------------------------------------------
+    # ENGINE / NOISE ISSUES
+    # --------------------------------------------------
     "engine_noise": {
         "keywords": [
-            "engine sound",
-            "engine noise",
-            "loud",
-            "louder",
-            "deep",
-            "rumbling",
-            "roaring",
-            "growling",
-            "humming",
-            "rattling",
-            "knocking",
+            "noise", "sound", "engine noise", "engine sound",
+            "whine", "whining", "high pitched", "high-pitched",
+            "grinding", "rattling", "knocking", "ticking",
+            "humming", "roaring", "rumbling",
+            "when accelerating", "during acceleration"
         ],
-        "diagnosis": "Unusual increase in engine noise",
+        "diagnosis": "Unusual engine or drivetrain noise",
         "explanation": (
-            "Changes in engine sound often point to exhaust, air intake, "
-            "or engine load-related issues."
+            "Unusual noises often indicate wear or improper operation in the "
+            "engine, belts, bearings, drivetrain, or transmission."
         ),
         "questions": [
-            "Is the sound louder when you accelerate?",
-            "Does the noise change with engine RPM or vehicle speed?",
-            "Do you hear it more from the front, middle, or rear of the car?",
-            "Is there any rattling or blowing sound underneath?"
+            "Does the noise increase with engine speed?",
+            "Is the noise louder when accelerating or decelerating?",
+            "Does it change when you press the clutch?"
         ],
-        "confidence": 0.6
+        "confidence": 0.6,
     },
 
-    # -----------------------------
-    # ENGINE VIBRATION / ROUGHNESS
-    # -----------------------------
-    "engine_vibration": {
+    # --------------------------------------------------
+    # TRANSMISSION / GEAR / CLUTCH ISSUES (CRITICAL)
+    # --------------------------------------------------
+    "gear_issue": {
         "keywords": [
-            "vibration",
-            "vibrating",
-            "shaking",
-            "rough",
-            "judder",
-            "engine shake",
-            "trembling",
+            "gear", "gears", "change gear", "change gears",
+            "cannot change gear", "can't change gear",
+            "unable to change gear", "unable to change gears",
+            "gear stuck", "stuck in gear", "won't shift",
+            "not shifting", "hard to shift",
+            "gear lever", "gear stick", "shifter",
+            "manual", "clutch",
+            "clutch pedal", "clutch not working",
+            "grinding", "grinds", "grinding noise",
+            "needs force", "lot of force", "muscle power",
+            "neutral only", "only neutral"
         ],
-        "diagnosis": "Engine vibration or rough running",
+        "diagnosis": "Difficulty changing gears",
         "explanation": (
-            "Engine vibrations usually indicate uneven combustion, "
-            "mounting issues, or drivetrain-related problems."
+            "Difficulty changing gears is commonly caused by clutch problems, "
+            "gear linkage issues, low or contaminated transmission fluid, "
+            "or internal transmission wear."
         ),
         "questions": [
-            "Does the vibration happen at idle or while driving?",
-            "Does it get worse when accelerating?",
-            "Do you feel it more in the steering wheel or the seat?"
+            "Does the car creep forward when you press the clutch and start the engine?",
+            "Does pumping the clutch pedal make gear engagement easier?",
+            "Is it hard to engage gears when the engine is OFF?",
+            "Did this issue start suddenly or gradually?"
         ],
-        "confidence": 0.6
+        "confidence": 0.75,
     },
 
-    # -----------------------------
-    # POWER LOSS / PERFORMANCE
-    # -----------------------------
-    "power_loss": {
-        "keywords": [
-            "loss of power",
-            "sluggish",
-            "slow pickup",
-            "not accelerating",
-            "weak",
-            "no power",
-            "hesitation",
-        ],
-        "diagnosis": "Reduced engine performance",
-        "explanation": (
-            "Loss of power can be caused by fuel delivery, air intake, "
-            "ignition, or exhaust-related issues."
-        ),
-        "questions": [
-            "Does the car feel weak only during acceleration?",
-            "Does it improve at higher speeds?",
-            "Any warning lights on the dashboard?"
-        ],
-        "confidence": 0.6
-    },
-
-    # -----------------------------
-    # STARTING ISSUES
-    # -----------------------------
+    # --------------------------------------------------
+    # STARTING / STALLING ISSUES
+    # --------------------------------------------------
     "starting_issue": {
         "keywords": [
-            "won't start",
-            "not starting",
-            "hard start",
-            "long crank",
-            "cranks but won't start",
-            "starting problem",
+            "won't start", "not starting", "no start",
+            "engine won't crank", "clicking sound",
+            "stalling", "stalls", "engine dies"
         ],
-        "diagnosis": "Starting difficulty detected",
+        "diagnosis": "Engine starting or stalling issue",
         "explanation": (
-            "Starting issues are commonly related to battery, fuel delivery, "
-            "or ignition system problems."
+            "Starting or stalling issues are often related to the battery, "
+            "starter motor, fuel delivery, or ignition system."
         ),
         "questions": [
-            "Does the engine crank normally or very slowly?",
-            "Do dashboard lights come on when you turn the key?",
-            "Does it start better when the engine is cold or warm?"
+            "Does the engine crank when you turn the key?",
+            "Do the dashboard lights come on normally?",
+            "Does the engine stall while driving or only at idle?"
         ],
-        "confidence": 0.7
+        "confidence": 0.65,
     },
 
-    # -----------------------------
-    # SMELL / ODOR
-    # -----------------------------
-    "smell_issue": {
+    # --------------------------------------------------
+    # POWER LOSS / PERFORMANCE ISSUES
+    # --------------------------------------------------
+    "power_loss": {
         "keywords": [
-            "burning smell",
-            "fuel smell",
-            "petrol smell",
-            "diesel smell",
-            "rubber smell",
-            "plastic smell",
+            "no power", "power loss", "weak acceleration",
+            "slow acceleration", "hesitation",
+            "lagging", "sluggish", "engine feels weak"
         ],
-        "diagnosis": "Unusual smell detected",
+        "diagnosis": "Loss of engine power",
         "explanation": (
-            "Unusual smells may indicate fuel leaks, overheating components, "
-            "or electrical issues."
+            "Loss of power may be caused by fuel delivery issues, air intake "
+            "problems, sensor faults, or exhaust restrictions."
         ),
         "questions": [
-            "Does the smell come from inside or outside the car?",
-            "Is it stronger after driving or while idling?",
-            "Do you notice any smoke along with the smell?"
+            "Does the problem happen all the time or only under load?",
+            "Are there any warning lights on the dashboard?",
+            "Does the engine rev freely in neutral?"
         ],
-        "confidence": 0.7
+        "confidence": 0.6,
     },
 
-    # -----------------------------
-    # SMOKE / STEAM
-    # -----------------------------
-    "smoke_issue": {
+    # --------------------------------------------------
+    # BRAKING ISSUES
+    # --------------------------------------------------
+    "brake_issue": {
         "keywords": [
-            "smoke",
-            "steam",
-            "white smoke",
-            "black smoke",
-            "blue smoke",
-            "smoking",
+            "brake", "brakes",
+            "brake pedal", "spongy brake",
+            "hard brake pedal",
+            "squealing", "brake noise",
+            "grinding brakes"
         ],
-        "diagnosis": "Smoke or steam observed",
+        "diagnosis": "Brake system issue",
         "explanation": (
-            "Smoke color and timing help identify whether the issue "
-            "is related to fuel, oil, or coolant."
+            "Brake issues may involve worn brake pads, air in the brake lines, "
+            "or hydraulic system problems."
         ),
         "questions": [
-            "What color is the smoke?",
-            "Does it happen during startup or while driving?",
-            "Is there any warning light or coolant loss?"
+            "Does the brake pedal feel soft or hard?",
+            "Do you hear noise when braking?",
+            "Has braking distance increased recently?"
         ],
-        "confidence": 0.7
+        "confidence": 0.8,
     },
 
-    # -----------------------------
+    # --------------------------------------------------
     # WARNING LIGHTS
-    # -----------------------------
-    "warning_lights": {
+    # --------------------------------------------------
+    "warning_light": {
         "keywords": [
-            "check engine",
-            "warning light",
-            "engine light",
-            "dashboard light",
-            "abs light",
-            "battery light",
-            "oil light",
+            "check engine", "warning light",
+            "engine light", "dashboard light",
+            "abs light", "battery light"
         ],
         "diagnosis": "Dashboard warning light detected",
         "explanation": (
-            "Warning lights indicate that the vehicle’s control system "
-            "has detected an abnormal condition."
+            "Warning lights indicate that the vehicle has detected a system fault "
+            "that should be diagnosed further."
         ),
         "questions": [
             "Which warning light is on?",
-            "Is it steady or blinking?",
-            "Did it appear suddenly or gradually?"
+            "Is the light steady or flashing?",
+            "Did any symptoms appear along with the light?"
         ],
-        "confidence": 0.7
+        "confidence": 0.7,
     },
 
-    # -----------------------------
-    # BRAKING ISSUES
-    # -----------------------------
-    "brake_issue": {
+    # --------------------------------------------------
+    # SMELL / SMOKE ISSUES
+    # --------------------------------------------------
+    "smell_smoke": {
         "keywords": [
-            "brake noise",
-            "squeaking",
-            "grinding",
-            "brake vibration",
-            "soft brake",
-            "hard brake",
+            "smell", "burning smell",
+            "smoke", "white smoke",
+            "blue smoke", "black smoke"
         ],
-        "diagnosis": "Braking issue detected",
+        "diagnosis": "Unusual smell or smoke detected",
         "explanation": (
-            "Brake noises or changes in pedal feel usually indicate wear "
-            "or hydraulic system issues."
+            "Unusual smells or smoke can indicate overheating, fluid leaks, "
+            "or internal engine problems."
         ),
         "questions": [
-            "Do you hear the noise while braking or all the time?",
-            "Does the brake pedal feel soft or hard?",
-            "Any warning lights related to brakes?"
+            "What color is the smoke, if any?",
+            "Does the smell appear after driving or at idle?",
+            "Have you noticed any fluid leaks?"
         ],
-        "confidence": 0.7
+        "confidence": 0.75,
     },
 }
