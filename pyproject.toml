@@ -1,13 +1,15 @@
 [project]
 name = "final-year"
 version = "0.1.0"
-description = "Add your description here"
+description = "Vehicle Repair AI Agent"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
+
 dependencies = [
-    "cryptography>=46.0.3",
-    "dotenv>=0.9.9",
+    "uv",
     "fastapi>=0.123.5",
+    "uvicorn[standard]>=0.38.0",
+    "cryptography>=46.0.3",
     "httpx>=0.28.1",
     "langchain==1.2.0",
     "langchain-community>=0.4.1",
@@ -18,5 +20,4 @@ dependencies = [
     "requests>=2.32.5",
     "supabase>=2.27.0",
     "tavily-python>=0.7.17",
-    "uvicorn>=0.38.0",
 ]
