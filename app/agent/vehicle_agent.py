@@ -1,7 +1,7 @@
 import json
 import re
 from uuid import UUID, uuid4
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Any
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -9,13 +9,11 @@ from tavily import TavilyClient
 
 from app.config import GROQ_API_KEY, TAVILY_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
-from app.agent.vehicle_symptom import SYMPTOM_GUARDS
 from app.db.db import (
     load_short_term_memory,
     load_short_term_memory_structured,
     save_chat_turn,
 )
-from app.data import OBD_CODES
 
 
 # --------------------------------------------------
@@ -30,7 +28,6 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
     "Does it happen all the time or only in certain situations?",
 ]
 
-### 🔥 NEW: intent patterns
 YES_PATTERNS = [
     "yes", "yeah", "yep", "sure", "ok", "okay", "please do", "go ahead"
 ]
@@ -63,27 +60,8 @@ prompt = ChatPromptTemplate.from_messages(
 
 
 # --------------------------------------------------
-# Web search
-# --------------------------------------------------
-
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
-
-def web_search_possible_causes(query: str) -> List[str]:
-    try:
-        response = tavily.search(query=f"car {query} causes", max_results=5)
-        return [r["content"] for r in response.get("results", []) if r.get("content")]
-    except Exception:
-        return []
-
-
-# --------------------------------------------------
 # Helpers
 # --------------------------------------------------
-
-def extract_obd_codes(text: str) -> List[str]:
-    return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
-
 
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
     match = re.search(r"\{.*\}", text, re.S)
@@ -105,11 +83,8 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
     resp.setdefault("youtube_urls", [])
     resp.setdefault("confidence", 0.5)
 
-    resp["severity"] = float(resp.get("severity", 0.5))
-    resp["confidence"] = float(resp.get("confidence", 0.5))
-
-    if resp["action"] == "ASK" and not resp["follow_up_questions"]:
-        resp["follow_up_questions"] = GENERIC_FOLLOW_UP_QUESTIONS
+    resp["severity"] = float(resp["severity"])
+    resp["confidence"] = float(resp["confidence"])
 
     if resp["action"] != "DIY":
         resp["steps"] = []
@@ -117,10 +92,6 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
 
     return resp
 
-
-# --------------------------------------------------
-# Context helpers
-# --------------------------------------------------
 
 def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     for turn in reversed(history):
@@ -130,16 +101,28 @@ def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     return None
 
 
+def count_consecutive_escalates(history: List[Dict[str, Any]], limit: int = 5) -> int:
+    """
+    Count consecutive ESCALATE actions from the most recent backwards.
+    """
+    count = 0
+    for turn in reversed(history[-limit:]):
+        agent = turn.get("agent")
+        if agent and agent.get("action") == "ESCALATE":
+            count += 1
+        else:
+            break
+    return count
+
+
 # --------------------------------------------------
 # Workshop response
 # --------------------------------------------------
 
 def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
-    # 🔧 This intentionally does NOT call Google Maps directly here
-    # Your existing /vehicle/workshops endpoint should be used by frontend
     return {
         "diagnosis": "Professional assistance recommended",
-        "explanation": "I can help you find nearby workshops if you want.",
+        "explanation": "Here are nearby workshops that can help with this issue.",
         "severity": 1.0,
         "action": "WORKSHOP_RESULTS",
         "steps": [],
@@ -150,7 +133,7 @@ def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
 
 
 # --------------------------------------------------
-# Main agent entry (PRODUCTION SAFE)
+# Main agent entry
 # --------------------------------------------------
 
 def run_vehicle_agent(
@@ -162,6 +145,7 @@ def run_vehicle_agent(
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
+    # Backend owns chat_id
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
 
@@ -169,10 +153,11 @@ def run_vehicle_agent(
     history_structured = load_short_term_memory_structured(chat_id, limit=5)
 
     last_action = get_last_agent_action(history_structured)
+    escalate_count = count_consecutive_escalates(history_structured)
     text = user_input.lower()
 
     # --------------------------------------------------
-    # 🔥 DIRECT WORKSHOP INTENT (skip LLM)
+    # Direct workshop intent (explicit user request)
     # --------------------------------------------------
     if any(k in text for k in WORKSHOP_PATTERNS):
         response = build_workshop_response(chat_id)
@@ -180,13 +165,28 @@ def run_vehicle_agent(
         return response
 
     # --------------------------------------------------
-    # 🔥 CONFIRMATION AFTER ESCALATION
+    # YES handling
     # --------------------------------------------------
-    if last_action in {"ESCALATE", "CONFIRM_WORKSHOP"}:
-        if any(y in text for y in YES_PATTERNS):
-            response = build_workshop_response(chat_id)
-            save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
-            return response
+    if last_action == "ESCALATE" and any(y in text for y in YES_PATTERNS):
+        response = {
+            "diagnosis": "Professional help recommended",
+            "explanation": "Based on the issue, a professional inspection is advisable.",
+            "severity": 0.85,
+            "action": "CONFIRM_WORKSHOP",
+            "steps": [],
+            "follow_up_questions": [
+                "This issue might be severe. I recommend a workshop. Would you like me to find nearby workshops?"
+            ],
+            "confidence": 0.85,
+            "chat_id": str(chat_id),
+        }
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+        return response
+
+    if last_action == "CONFIRM_WORKSHOP" and any(y in text for y in YES_PATTERNS):
+        response = build_workshop_response(chat_id)
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+        return response
 
     # --------------------------------------------------
     # Normal LLM flow
@@ -205,11 +205,27 @@ def run_vehicle_agent(
 
         parsed = normalize_agent_response(parsed)
 
-        # Escalation → confirmation question
-        if parsed["action"] == "ESCALATE":
+        # --------------------------------------------------
+        # HARD STATE ENFORCEMENT
+        # --------------------------------------------------
+
+        # Auto-upgrade ESCALATE → CONFIRM_WORKSHOP after 3 turns
+        if parsed["action"] == "ESCALATE" and escalate_count >= 2:
             parsed["action"] = "CONFIRM_WORKSHOP"
             parsed["follow_up_questions"] = [
+                "This issue has persisted and likely needs professional help. I recommend a workshop. Would you like me to find nearby workshops?"
+            ]
+
+        # Normal ESCALATE (permission-based)
+        elif parsed["action"] == "ESCALATE":
+            parsed["follow_up_questions"] = [
                 "Would you like me to find nearby workshops?"
+            ]
+
+        # CONFIRM_WORKSHOP (recommendation-based)
+        elif parsed["action"] == "CONFIRM_WORKSHOP":
+            parsed["follow_up_questions"] = [
+                "This issue might be severe. I recommend a workshop. Would you like me to find nearby workshops?"
             ]
 
         parsed["chat_id"] = str(chat_id)
