@@ -1,10 +1,9 @@
 import json
-import re
 from uuid import UUID, uuid4
 from typing import List, Dict, Any
 
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq # type: ignore
+from langchain_core.prompts import ChatPromptTemplate # type: ignore
 
 from app.config import GROQ_API_KEY
 from app.agent.prompts.vehicle_prompt import vehicle_prompt
@@ -14,13 +13,14 @@ from app.db.db import (
     save_chat_turn,
 )
 
-# 🆕 Diagnostic memory imports
+# Diagnostic memory (Supabase-based)
 from app.db.ai_memory import (
     load_chat_summary,
     upsert_chat_summary,
     load_open_issues,
     upsert_issue_from_summary,
 )
+
 from app.agent.prompts.summary_prompt import build_summary_prompt
 from app.agent.prompts.issue_prompt import build_issue_prompt
 
@@ -46,6 +46,7 @@ WORKSHOP_PATTERNS = [
     "mechanic", "repair shop", "nearby garage"
 ]
 
+
 # --------------------------------------------------
 # LLM setup
 # --------------------------------------------------
@@ -65,6 +66,7 @@ prompt = ChatPromptTemplate.from_messages(
         ),
     ]
 )
+
 
 # --------------------------------------------------
 # Helpers
@@ -167,7 +169,7 @@ def run_vehicle_agent(
     escalate_count = count_consecutive_escalates(history_structured)
     active_diagnosis = get_active_diagnosis(history_structured)
 
-    # 🆕 Diagnostic memory
+    # Diagnostic memory
     chat_summary = load_chat_summary(vehicle_id)
     open_issues = load_open_issues(vehicle_id)
 
@@ -291,8 +293,10 @@ def run_vehicle_agent(
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
 
         # --------------------------------------------------
-        # 🆕 Diagnostic memory updates
+        # Diagnostic memory updates (SAFE)
         # --------------------------------------------------
+
+        summary_text = chat_summary  # initialize safely
 
         if parsed["confidence"] >= 0.6 or parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
             summary_prompt = build_summary_prompt(
@@ -301,7 +305,11 @@ def run_vehicle_agent(
             summary_text = llm.invoke(summary_prompt).content
             upsert_chat_summary(vehicle_id, summary_text)
 
-        if parsed["confidence"] >= 0.7 and parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
+        if (
+            summary_text
+            and parsed["confidence"] >= 0.7
+            and parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}
+        ):
             issue_prompt = build_issue_prompt(summary_text)
             issue_json = safe_json_extract(llm.invoke(issue_prompt).content)
             if issue_json:

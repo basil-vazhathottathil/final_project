@@ -4,7 +4,7 @@ from app.db.db import supabase
 
 
 # --------------------------------------------------
-# Chat summary (ai_reply_summary)
+# Chat summary (ai_chat_summary)
 # --------------------------------------------------
 
 def load_chat_summary(vehicle_id: Optional[str]) -> Optional[str]:
@@ -13,7 +13,7 @@ def load_chat_summary(vehicle_id: Optional[str]) -> Optional[str]:
 
     response = (
         supabase
-        .table("ai_reply_summary")
+        .table("ai_chat_summary")
         .select("summary")
         .eq("vehicle_id", vehicle_id)
         .order("created_at", desc=True)
@@ -31,7 +31,7 @@ def upsert_chat_summary(vehicle_id: Optional[str], summary: str) -> None:
     if not vehicle_id:
         return
 
-    supabase.table("ai_reply_summary").insert({
+    supabase.table("ai_chat_summary").insert({
         "vehicle_id": vehicle_id,
         "summary": summary,
     }).execute()

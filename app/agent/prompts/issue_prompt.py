@@ -1,4 +1,4 @@
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage # type: ignore
 
 
 def build_issue_prompt(chat_summary: str):
