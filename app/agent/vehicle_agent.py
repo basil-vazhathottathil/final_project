@@ -1,34 +1,49 @@
 import json
-import re
 from uuid import UUID, uuid4
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Any
 
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from tavily import TavilyClient
+from langchain_groq import ChatGroq  # type: ignore
+from langchain_core.prompts import ChatPromptTemplate  # type: ignore
 
-from app.config import GROQ_API_KEY, TAVILY_API_KEY
-from app.agent.vehicle_prompt import vehicle_prompt
-from app.agent.vehicle_symptom import SYMPTOM_GUARDS
+from app.config import GROQ_API_KEY
+from app.agent.prompts.vehicle_prompt import vehicle_prompt
 from app.db.db import (
     load_short_term_memory,
     load_short_term_memory_structured,
     save_chat_turn,
 )
-from app.data import OBD_CODES
+
+# Diagnostic memory
+from app.db.ai_memory import (
+    load_chat_summary,
+    upsert_chat_summary,
+    load_open_issues,
+    upsert_issue_from_summary,
+)
+
+from app.agent.prompts.summary_prompt import build_summary_prompt
+from app.agent.prompts.issue_prompt import build_issue_prompt
 
 
 # --------------------------------------------------
 # Constants
 # --------------------------------------------------
 
-# Swagger auto-injected UUID (must never be trusted)
 SWAGGER_DUMMY_UUID = UUID("3fa85f64-5717-4562-b3fc-2c963f66afa6")
 
 GENERIC_FOLLOW_UP_QUESTIONS = [
     "Can you describe the issue in your own words?",
     "When did you first notice this?",
     "Does it happen all the time or only in certain situations?",
+]
+
+YES_PATTERNS = [
+    "yes", "yeah", "yep", "sure", "ok", "okay", "please do", "go ahead"
+]
+
+WORKSHOP_PATTERNS = [
+    "workshop", "garage", "service center",
+    "mechanic", "repair shop", "nearby garage"
 ]
 
 
@@ -47,42 +62,22 @@ prompt = ChatPromptTemplate.from_messages(
         ("system", vehicle_prompt),
         (
             "human",
-            "Conversation history:\n{conversation_history}\n\nUser issue:\n{user_input}",
+            "Conversation history:\n{conversation_history}\n\nUser update:\n{user_input}",
         ),
     ]
 )
 
 
 # --------------------------------------------------
-# Web search
-# --------------------------------------------------
-
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
-
-def web_search_possible_causes(query: str) -> List[str]:
-    try:
-        response = tavily.search(query=f"car {query} causes", max_results=5)
-        return [r["content"] for r in response.get("results", []) if r.get("content")]
-    except Exception:
-        return []
-
-
-# --------------------------------------------------
 # Helpers
 # --------------------------------------------------
 
-def extract_obd_codes(text: str) -> List[str]:
-    return re.findall(r"\b[PBCU]\d{4}\b", text.upper())
-
-
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
-    match = re.search(r"\{.*\}", text, re.S)
-    if not match:
-        return None
     try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except Exception:
         return None
 
 
@@ -96,11 +91,8 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
     resp.setdefault("youtube_urls", [])
     resp.setdefault("confidence", 0.5)
 
-    resp["severity"] = float(resp.get("severity", 0.5))
-    resp["confidence"] = float(resp.get("confidence", 0.5))
-
-    if resp["action"] == "ASK" and not resp["follow_up_questions"]:
-        resp["follow_up_questions"] = GENERIC_FOLLOW_UP_QUESTIONS
+    resp["severity"] = float(resp["severity"])
+    resp["confidence"] = float(resp["confidence"])
 
     if resp["action"] != "DIY":
         resp["steps"] = []
@@ -109,87 +101,71 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
     return resp
 
 
-# --------------------------------------------------
-# Progression logic
-# --------------------------------------------------
-
-def reduces_uncertainty(user_input: str) -> bool:
-    text = user_input.lower()
-    markers = [
-        "yes", "no", "only", "when", "while",
-        "manual", "automatic",
-        "stiff", "loose", "hard", "soft",
-        "noise", "grind", "grinding",
-        "won't", "can't",
-    ]
-    return any(k in text for k in markers)
+def compute_cumulative_confidence(previous: float | None, current: float) -> float:
+    if previous is None:
+        return round(current, 2)
+    return round((previous * 0.6) + (current * 0.4), 2)
 
 
-def remove_redundant_questions(questions: List[str], user_input: str) -> List[str]:
-    text = user_input.lower()
-    return [
-        q for q in questions
-        if not any(word in text for word in q.lower().split())
-    ]
+def is_persistent_issue(chat_summary: str | None, open_issues: list) -> bool:
+    if not chat_summary or not open_issues:
+        return False
+
+    summary_lower = chat_summary.lower()
+    for issue in open_issues:
+        title = issue.get("title", "").lower()
+        if title and title in summary_lower:
+            return True
+
+    return False
 
 
-def get_active_context(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     for turn in reversed(history):
         agent = turn.get("agent")
-        if agent and agent.get("action") == "ASK":
-            return {
-                "diagnosis": agent.get("diagnosis"),
-                "confidence": agent.get("confidence", 0.5),
-            }
-    return {}
+        if agent:
+            return agent.get("action")
+    return None
+
+
+def get_active_diagnosis(history: List[Dict[str, Any]]) -> str | None:
+    for turn in reversed(history):
+        agent = turn.get("agent")
+        if agent and agent.get("diagnosis"):
+            return agent["diagnosis"]
+    return None
+
+
+def count_consecutive_escalates(history: List[Dict[str, Any]], limit: int = 5) -> int:
+    count = 0
+    for turn in reversed(history[-limit:]):
+        agent = turn.get("agent")
+        if agent and agent.get("action") == "ESCALATE":
+            count += 1
+        else:
+            break
+    return count
 
 
 # --------------------------------------------------
-# OBD logic
+# Workshop response
 # --------------------------------------------------
 
-def apply_obd_logic(resp: Dict[str, Any], user_input: str) -> Dict[str, Any]:
-    codes = extract_obd_codes(user_input)
-    if not codes:
-        return resp
-
-    obd = OBD_CODES.get(codes[0])
-    if not obd:
-        return resp
-
-    resp["diagnosis"] = f"{codes[0]}: {obd['meaning']}"
-    resp["explanation"] = obd["description"]
-
-    if not obd["diy_possible"]:
-        resp["action"] = "ESCALATE"
-        resp["confidence"] = 0.9
-    elif obd["multi_cause"]:
-        resp["action"] = "ASK"
-
-    return resp
+def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
+    return {
+        "diagnosis": "Professional assistance recommended",
+        "explanation": "Here are nearby workshops that can help with this issue.",
+        "severity": 1.0,
+        "action": "WORKSHOP_RESULTS",
+        "steps": [],
+        "follow_up_questions": [],
+        "confidence": 0.9,
+        "chat_id": str(chat_id),
+    }
 
 
 # --------------------------------------------------
-# Symptom guard
-# --------------------------------------------------
-
-def apply_symptom_guard(resp: Dict[str, Any], text: str) -> Tuple[Dict[str, Any], bool]:
-    text = text.lower()
-
-    for symptom in SYMPTOM_GUARDS.values():
-        if any(k in text for k in symptom["keywords"]):
-            resp["diagnosis"] = symptom["diagnosis"]
-            resp["explanation"] = symptom["explanation"]
-            resp["follow_up_questions"] = symptom["questions"]
-            resp["confidence"] = max(resp["confidence"], symptom["confidence"])
-            resp["action"] = "ASK"
-            return resp, True
-
-    return resp, False
-
-
-# --------------------------------------------------
-# Main agent entry (PRODUCTION SAFE)
+# Main agent entry
 # --------------------------------------------------
 
 def run_vehicle_agent(
@@ -201,22 +177,55 @@ def run_vehicle_agent(
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
-    # 🔐 BACKEND OWNS CHAT ID
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
 
-    history_text = load_short_term_memory(chat_id, limit=5)
-    history_structured = load_short_term_memory_structured(chat_id, limit=5)
+    history_text = load_short_term_memory(chat_id, limit=10)
+    history_structured = load_short_term_memory_structured(chat_id, limit=10)
 
-    active = get_active_context(history_structured)
+    last_action = get_last_agent_action(history_structured)
+    escalate_count = count_consecutive_escalates(history_structured)
+    active_diagnosis = get_active_diagnosis(history_structured)
+
+    chat_summary = load_chat_summary(vehicle_id)
+    open_issues = load_open_issues(vehicle_id)
+
+    text = user_input.lower()
+
+    # --------------------------------------------------
+    # Direct workshop intent
+    # --------------------------------------------------
+    if any(k in text for k in WORKSHOP_PATTERNS):
+        response = build_workshop_response(chat_id)
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+        return response
+
+    # --------------------------------------------------
+    # LLM flow
+    # --------------------------------------------------
+
+    context_blocks = []
+
+    if chat_summary:
+        context_blocks.append(f"Conversation summary:\n{chat_summary}")
+
+    if open_issues:
+        issues_text = "\n".join(
+            f"- {i['title']} (severity: {i['severity']})"
+            for i in open_issues
+        )
+        context_blocks.append(f"Known unresolved issues:\n{issues_text}")
+
+    if active_diagnosis:
+        context_blocks.append(f"Current diagnosis: {active_diagnosis}")
 
     combined_input = user_input
-    if active.get("diagnosis"):
-        combined_input = f"{active['diagnosis']}\n{user_input}"
+    if context_blocks:
+        combined_input = "\n\n".join(context_blocks) + f"\n\nUser update:\n{user_input}"
 
     messages = prompt.format_messages(
         conversation_history=history_text,
-        user_input=user_input,
+        user_input=combined_input,
     )
 
     try:
@@ -226,34 +235,91 @@ def run_vehicle_agent(
             raise ValueError("Invalid JSON from model")
 
         parsed = normalize_agent_response(parsed)
-        parsed = apply_obd_logic(parsed, user_input)
-        parsed, _ = apply_symptom_guard(parsed, combined_input)
 
-        if parsed["action"] == "ASK" and reduces_uncertainty(user_input):
-            parsed["confidence"] = min(parsed["confidence"] + 0.15, 0.95)
-            parsed["follow_up_questions"] = remove_redundant_questions(
-                parsed["follow_up_questions"],
-                user_input,
-            )
+        # --------------------------------------------------
+        # 🔥 UPGRADE 1: CUMULATIVE CONFIDENCE
+        # --------------------------------------------------
 
-        if parsed["confidence"] > 0.85 and parsed["action"] == "ASK":
-            parsed["action"] = "ESCALATE"
+        previous_confidence = None
+        if history_structured:
+            last_agent = history_structured[-1].get("agent")
+            if isinstance(last_agent, dict):
+                previous_confidence = last_agent.get("confidence")
+
+        parsed["confidence"] = compute_cumulative_confidence(
+            previous_confidence,
+            parsed["confidence"]
+        )
+
+        # --------------------------------------------------
+        # 🔥 UPGRADE 2: PERSISTENCE-BASED ESCALATION
+        # --------------------------------------------------
+
+        if is_persistent_issue(chat_summary, open_issues):
+            parsed["confidence"] = min(1.0, parsed["confidence"] + 0.15)
+
+            if parsed["action"] == "ASK":
+                parsed["action"] = "ESCALATE"
+
+        # --------------------------------------------------
+        # HARD STATE ENFORCEMENT
+        # --------------------------------------------------
+
+        if parsed["action"] == "ESCALATE" and escalate_count >= 2:
+            parsed["action"] = "CONFIRM_WORKSHOP"
+            parsed["follow_up_questions"] = [
+                "This issue has persisted and likely needs professional help. I recommend a workshop. Would you like me to find nearby workshops?"
+            ]
+
+        elif parsed["action"] == "ESCALATE":
+            parsed["follow_up_questions"] = [
+                "Would you like me to find nearby workshops?"
+            ]
+
+        elif parsed["action"] == "CONFIRM_WORKSHOP":
+            parsed["follow_up_questions"] = [
+                "This issue might be severe. I recommend a workshop. Would you like me to find nearby workshops?"
+            ]
 
         parsed["chat_id"] = str(chat_id)
 
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
+
+        # --------------------------------------------------
+        # Diagnostic memory updates
+        # --------------------------------------------------
+
+        summary_text = chat_summary
+
+        if parsed["confidence"] >= 0.6 or parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
+            summary_prompt = build_summary_prompt(
+                history_structured + [{"user": user_input, "agent": parsed}]
+            )
+            summary_text = llm.invoke(summary_prompt).content
+            upsert_chat_summary(vehicle_id, summary_text)
+
+        if (
+            summary_text
+            and parsed["confidence"] >= 0.7
+            and parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}
+        ):
+            issue_prompt = build_issue_prompt(summary_text)
+            issue_json = safe_json_extract(llm.invoke(issue_prompt).content)
+            if issue_json:
+                upsert_issue_from_summary(vehicle_id, issue_json)
+
         return parsed
 
     except Exception:
         fallback = {
-            "diagnosis": active.get("diagnosis", "Vehicle issue detected"),
-            "explanation": "Thanks for the details. Let’s continue step by step.",
+            "diagnosis": active_diagnosis or "Vehicle issue detected",
+            "explanation": "Thanks for the update. Let’s continue step by step.",
             "severity": 0.6,
             "action": "ASK",
             "steps": [],
             "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
-            "confidence": active.get("confidence", 0.6),
+            "confidence": 0.6,
             "chat_id": str(chat_id),
         }
 
