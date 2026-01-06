@@ -2,8 +2,8 @@ import json
 from uuid import UUID, uuid4
 from typing import List, Dict, Any
 
-from langchain_groq import ChatGroq # type: ignore
-from langchain_core.prompts import ChatPromptTemplate # type: ignore
+from langchain_groq import ChatGroq  # type: ignore
+from langchain_core.prompts import ChatPromptTemplate  # type: ignore
 
 from app.config import GROQ_API_KEY
 from app.agent.prompts.vehicle_prompt import vehicle_prompt
@@ -13,7 +13,7 @@ from app.db.db import (
     save_chat_turn,
 )
 
-# Diagnostic memory (Supabase-based)
+# Diagnostic memory
 from app.db.ai_memory import (
     load_chat_summary,
     upsert_chat_summary,
@@ -101,6 +101,25 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
     return resp
 
 
+def compute_cumulative_confidence(previous: float | None, current: float) -> float:
+    if previous is None:
+        return round(current, 2)
+    return round((previous * 0.6) + (current * 0.4), 2)
+
+
+def is_persistent_issue(chat_summary: str | None, open_issues: list) -> bool:
+    if not chat_summary or not open_issues:
+        return False
+
+    summary_lower = chat_summary.lower()
+    for issue in open_issues:
+        title = issue.get("title", "").lower()
+        if title and title in summary_lower:
+            return True
+
+    return False
+
+
 def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     for turn in reversed(history):
         agent = turn.get("agent")
@@ -158,7 +177,6 @@ def run_vehicle_agent(
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
-    # Backend owns chat_id
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
 
@@ -169,7 +187,6 @@ def run_vehicle_agent(
     escalate_count = count_consecutive_escalates(history_structured)
     active_diagnosis = get_active_diagnosis(history_structured)
 
-    # Diagnostic memory
     chat_summary = load_chat_summary(vehicle_id)
     open_issues = load_open_issues(vehicle_id)
 
@@ -184,56 +201,7 @@ def run_vehicle_agent(
         return response
 
     # --------------------------------------------------
-    # YES handling
-    # --------------------------------------------------
-    if last_action == "ESCALATE" and any(y in text for y in YES_PATTERNS):
-        response = {
-            "diagnosis": active_diagnosis or "Professional help recommended",
-            "explanation": "Based on the issue, a professional inspection is advisable.",
-            "severity": 0.85,
-            "action": "CONFIRM_WORKSHOP",
-            "steps": [],
-            "follow_up_questions": [
-                "This issue might be severe. I recommend a workshop. Would you like me to find nearby workshops?"
-            ],
-            "confidence": 0.85,
-            "chat_id": str(chat_id),
-        }
-        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
-        return response
-
-    if last_action == "CONFIRM_WORKSHOP" and any(y in text for y in YES_PATTERNS):
-        response = build_workshop_response(chat_id)
-        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
-        return response
-
-    # --------------------------------------------------
-    # DIY SHORT-CIRCUIT: Battery corrosion
-    # --------------------------------------------------
-    if "corrosion" in text and "battery" in text:
-        response = {
-            "diagnosis": "Battery terminal corrosion",
-            "explanation": "Corrosion can block electrical flow and prevent starting.",
-            "severity": 0.4,
-            "action": "DIY",
-            "steps": [
-                "Turn off the car and remove the keys",
-                "Disconnect the negative terminal first",
-                "Clean corrosion using baking soda and water",
-                "Reconnect terminals securely"
-            ],
-            "follow_up_questions": [],
-            "youtube_urls": [
-                "https://www.youtube.com/watch?v=YC--MLNIbik"
-            ],
-            "confidence": 0.9,
-            "chat_id": str(chat_id),
-        }
-        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
-        return response
-
-    # --------------------------------------------------
-    # LLM flow with diagnostic context injection
+    # LLM flow
     # --------------------------------------------------
 
     context_blocks = []
@@ -269,6 +237,31 @@ def run_vehicle_agent(
         parsed = normalize_agent_response(parsed)
 
         # --------------------------------------------------
+        # 🔥 UPGRADE 1: CUMULATIVE CONFIDENCE
+        # --------------------------------------------------
+
+        previous_confidence = None
+        if history_structured:
+            last_agent = history_structured[-1].get("agent")
+            if isinstance(last_agent, dict):
+                previous_confidence = last_agent.get("confidence")
+
+        parsed["confidence"] = compute_cumulative_confidence(
+            previous_confidence,
+            parsed["confidence"]
+        )
+
+        # --------------------------------------------------
+        # 🔥 UPGRADE 2: PERSISTENCE-BASED ESCALATION
+        # --------------------------------------------------
+
+        if is_persistent_issue(chat_summary, open_issues):
+            parsed["confidence"] = min(1.0, parsed["confidence"] + 0.15)
+
+            if parsed["action"] == "ASK":
+                parsed["action"] = "ESCALATE"
+
+        # --------------------------------------------------
         # HARD STATE ENFORCEMENT
         # --------------------------------------------------
 
@@ -293,10 +286,10 @@ def run_vehicle_agent(
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
 
         # --------------------------------------------------
-        # Diagnostic memory updates (SAFE)
+        # Diagnostic memory updates
         # --------------------------------------------------
 
-        summary_text = chat_summary  # initialize safely
+        summary_text = chat_summary
 
         if parsed["confidence"] >= 0.6 or parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
             summary_prompt = build_summary_prompt(
