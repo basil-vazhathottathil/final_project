@@ -7,12 +7,23 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.config import GROQ_API_KEY
-from app.agent.vehicle_prompt import vehicle_prompt
+from app.agent.prompts.vehicle_prompt import vehicle_prompt
 from app.db.db import (
     load_short_term_memory,
     load_short_term_memory_structured,
     save_chat_turn,
 )
+
+# 🆕 Diagnostic memory imports
+from app.db.ai_memory import (
+    load_chat_summary,
+    upsert_chat_summary,
+    load_open_issues,
+    upsert_issue_from_summary,
+)
+from app.agent.prompts.summary_prompt import build_summary_prompt
+from app.agent.prompts.issue_prompt import build_issue_prompt
+
 
 # --------------------------------------------------
 # Constants
@@ -60,9 +71,6 @@ prompt = ChatPromptTemplate.from_messages(
 # --------------------------------------------------
 
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
-    """
-    Tolerant JSON extractor – handles extra text before/after JSON.
-    """
     try:
         start = text.index("{")
         end = text.rindex("}") + 1
@@ -100,9 +108,6 @@ def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
 
 
 def get_active_diagnosis(history: List[Dict[str, Any]]) -> str | None:
-    """
-    Retrieves the most recent diagnosis to maintain continuity.
-    """
     for turn in reversed(history):
         agent = turn.get("agent")
         if agent and agent.get("diagnosis"):
@@ -161,6 +166,10 @@ def run_vehicle_agent(
     last_action = get_last_agent_action(history_structured)
     escalate_count = count_consecutive_escalates(history_structured)
     active_diagnosis = get_active_diagnosis(history_structured)
+
+    # 🆕 Diagnostic memory
+    chat_summary = load_chat_summary(vehicle_id)
+    open_issues = load_open_issues(vehicle_id)
 
     text = user_input.lower()
 
@@ -222,12 +231,27 @@ def run_vehicle_agent(
         return response
 
     # --------------------------------------------------
-    # LLM flow with context injection
+    # LLM flow with diagnostic context injection
     # --------------------------------------------------
 
-    combined_input = user_input
+    context_blocks = []
+
+    if chat_summary:
+        context_blocks.append(f"Conversation summary:\n{chat_summary}")
+
+    if open_issues:
+        issues_text = "\n".join(
+            f"- {i['title']} (severity: {i['severity']})"
+            for i in open_issues
+        )
+        context_blocks.append(f"Known unresolved issues:\n{issues_text}")
+
     if active_diagnosis:
-        combined_input = f"Current diagnosis: {active_diagnosis}\nUser update: {user_input}"
+        context_blocks.append(f"Current diagnosis: {active_diagnosis}")
+
+    combined_input = user_input
+    if context_blocks:
+        combined_input = "\n\n".join(context_blocks) + f"\n\nUser update:\n{user_input}"
 
     messages = prompt.format_messages(
         conversation_history=history_text,
@@ -246,7 +270,6 @@ def run_vehicle_agent(
         # HARD STATE ENFORCEMENT
         # --------------------------------------------------
 
-        # Auto-upgrade ESCALATE → CONFIRM_WORKSHOP after 3 turns
         if parsed["action"] == "ESCALATE" and escalate_count >= 2:
             parsed["action"] = "CONFIRM_WORKSHOP"
             parsed["follow_up_questions"] = [
@@ -266,6 +289,24 @@ def run_vehicle_agent(
         parsed["chat_id"] = str(chat_id)
 
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
+
+        # --------------------------------------------------
+        # 🆕 Diagnostic memory updates
+        # --------------------------------------------------
+
+        if parsed["confidence"] >= 0.6 or parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
+            summary_prompt = build_summary_prompt(
+                history_structured + [{"user": user_input, "agent": parsed}]
+            )
+            summary_text = llm.invoke(summary_prompt).content
+            upsert_chat_summary(vehicle_id, summary_text)
+
+        if parsed["confidence"] >= 0.7 and parsed["action"] in {"DIY", "ESCALATE", "CONFIRM_WORKSHOP"}:
+            issue_prompt = build_issue_prompt(summary_text)
+            issue_json = safe_json_extract(llm.invoke(issue_prompt).content)
+            if issue_json:
+                upsert_issue_from_summary(vehicle_id, issue_json)
+
         return parsed
 
     except Exception:
