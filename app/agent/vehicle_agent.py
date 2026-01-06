@@ -22,13 +22,22 @@ from app.data import OBD_CODES
 # Constants
 # --------------------------------------------------
 
-# Swagger auto-injected UUID (must never be trusted)
 SWAGGER_DUMMY_UUID = UUID("3fa85f64-5717-4562-b3fc-2c963f66afa6")
 
 GENERIC_FOLLOW_UP_QUESTIONS = [
     "Can you describe the issue in your own words?",
     "When did you first notice this?",
     "Does it happen all the time or only in certain situations?",
+]
+
+### 🔥 NEW: intent patterns
+YES_PATTERNS = [
+    "yes", "yeah", "yep", "sure", "ok", "okay", "please do", "go ahead"
+]
+
+WORKSHOP_PATTERNS = [
+    "workshop", "garage", "service center",
+    "mechanic", "repair shop", "nearby garage"
 ]
 
 
@@ -110,82 +119,34 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --------------------------------------------------
-# Progression logic
+# Context helpers
 # --------------------------------------------------
 
-def reduces_uncertainty(user_input: str) -> bool:
-    text = user_input.lower()
-    markers = [
-        "yes", "no", "only", "when", "while",
-        "manual", "automatic",
-        "stiff", "loose", "hard", "soft",
-        "noise", "grind", "grinding",
-        "won't", "can't",
-    ]
-    return any(k in text for k in markers)
-
-
-def remove_redundant_questions(questions: List[str], user_input: str) -> List[str]:
-    text = user_input.lower()
-    return [
-        q for q in questions
-        if not any(word in text for word in q.lower().split())
-    ]
-
-
-def get_active_context(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     for turn in reversed(history):
         agent = turn.get("agent")
-        if agent and agent.get("action") == "ASK":
-            return {
-                "diagnosis": agent.get("diagnosis"),
-                "confidence": agent.get("confidence", 0.5),
-            }
-    return {}
+        if agent:
+            return agent.get("action")
+    return None
 
 
 # --------------------------------------------------
-# OBD logic
+# Workshop response
 # --------------------------------------------------
 
-def apply_obd_logic(resp: Dict[str, Any], user_input: str) -> Dict[str, Any]:
-    codes = extract_obd_codes(user_input)
-    if not codes:
-        return resp
-
-    obd = OBD_CODES.get(codes[0])
-    if not obd:
-        return resp
-
-    resp["diagnosis"] = f"{codes[0]}: {obd['meaning']}"
-    resp["explanation"] = obd["description"]
-
-    if not obd["diy_possible"]:
-        resp["action"] = "ESCALATE"
-        resp["confidence"] = 0.9
-    elif obd["multi_cause"]:
-        resp["action"] = "ASK"
-
-    return resp
-
-
-# --------------------------------------------------
-# Symptom guard
-# --------------------------------------------------
-
-def apply_symptom_guard(resp: Dict[str, Any], text: str) -> Tuple[Dict[str, Any], bool]:
-    text = text.lower()
-
-    for symptom in SYMPTOM_GUARDS.values():
-        if any(k in text for k in symptom["keywords"]):
-            resp["diagnosis"] = symptom["diagnosis"]
-            resp["explanation"] = symptom["explanation"]
-            resp["follow_up_questions"] = symptom["questions"]
-            resp["confidence"] = max(resp["confidence"], symptom["confidence"])
-            resp["action"] = "ASK"
-            return resp, True
-
-    return resp, False
+def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
+    # 🔧 This intentionally does NOT call Google Maps directly here
+    # Your existing /vehicle/workshops endpoint should be used by frontend
+    return {
+        "diagnosis": "Professional assistance recommended",
+        "explanation": "I can help you find nearby workshops if you want.",
+        "severity": 1.0,
+        "action": "WORKSHOP_RESULTS",
+        "steps": [],
+        "follow_up_questions": [],
+        "confidence": 0.9,
+        "chat_id": str(chat_id),
+    }
 
 
 # --------------------------------------------------
@@ -201,18 +162,35 @@ def run_vehicle_agent(
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
-    # 🔐 BACKEND OWNS CHAT ID
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
 
     history_text = load_short_term_memory(chat_id, limit=5)
     history_structured = load_short_term_memory_structured(chat_id, limit=5)
 
-    active = get_active_context(history_structured)
+    last_action = get_last_agent_action(history_structured)
+    text = user_input.lower()
 
-    combined_input = user_input
-    if active.get("diagnosis"):
-        combined_input = f"{active['diagnosis']}\n{user_input}"
+    # --------------------------------------------------
+    # 🔥 DIRECT WORKSHOP INTENT (skip LLM)
+    # --------------------------------------------------
+    if any(k in text for k in WORKSHOP_PATTERNS):
+        response = build_workshop_response(chat_id)
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+        return response
+
+    # --------------------------------------------------
+    # 🔥 CONFIRMATION AFTER ESCALATION
+    # --------------------------------------------------
+    if last_action in {"ESCALATE", "CONFIRM_WORKSHOP"}:
+        if any(y in text for y in YES_PATTERNS):
+            response = build_workshop_response(chat_id)
+            save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+            return response
+
+    # --------------------------------------------------
+    # Normal LLM flow
+    # --------------------------------------------------
 
     messages = prompt.format_messages(
         conversation_history=history_text,
@@ -226,18 +204,13 @@ def run_vehicle_agent(
             raise ValueError("Invalid JSON from model")
 
         parsed = normalize_agent_response(parsed)
-        parsed = apply_obd_logic(parsed, user_input)
-        parsed, _ = apply_symptom_guard(parsed, combined_input)
 
-        if parsed["action"] == "ASK" and reduces_uncertainty(user_input):
-            parsed["confidence"] = min(parsed["confidence"] + 0.15, 0.95)
-            parsed["follow_up_questions"] = remove_redundant_questions(
-                parsed["follow_up_questions"],
-                user_input,
-            )
-
-        if parsed["confidence"] > 0.85 and parsed["action"] == "ASK":
-            parsed["action"] = "ESCALATE"
+        # Escalation → confirmation question
+        if parsed["action"] == "ESCALATE":
+            parsed["action"] = "CONFIRM_WORKSHOP"
+            parsed["follow_up_questions"] = [
+                "Would you like me to find nearby workshops?"
+            ]
 
         parsed["chat_id"] = str(chat_id)
 
@@ -246,14 +219,14 @@ def run_vehicle_agent(
 
     except Exception:
         fallback = {
-            "diagnosis": active.get("diagnosis", "Vehicle issue detected"),
+            "diagnosis": "Vehicle issue detected",
             "explanation": "Thanks for the details. Let’s continue step by step.",
             "severity": 0.6,
             "action": "ASK",
             "steps": [],
             "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
-            "confidence": active.get("confidence", 0.6),
+            "confidence": 0.6,
             "chat_id": str(chat_id),
         }
 
