@@ -1,6 +1,6 @@
 import json
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import List, Tuple, Dict, Any
 
 from langchain_groq import ChatGroq
@@ -47,7 +47,7 @@ prompt = ChatPromptTemplate.from_messages(
         ("system", vehicle_prompt),
         (
             "human",
-            "Conversation history:\n{conversation_history}\n\nUser issue:\n{user_input}"
+            "Conversation history:\n{conversation_history}\n\nUser issue:\n{user_input}",
         ),
     ]
 )
@@ -77,7 +77,7 @@ def web_search_from_raw_query(query: str) -> List[str]:
 
 
 # --------------------------------------------------
-# Helpers (GENERIC – NOT HARD-CODED)
+# Helpers
 # --------------------------------------------------
 
 def extract_obd_codes(text: str) -> List[str]:
@@ -125,30 +125,24 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --------------------------------------------------
-# GENERIC PROGRESSION LOGIC (KEY PART)
+# Generic progression logic
 # --------------------------------------------------
 
 def reduces_uncertainty(user_input: str) -> bool:
-    """
-    Generic detection of whether the user provided clarifying information.
-    No vehicle-specific logic here.
-    """
     text = user_input.lower()
-
     clarification_markers = [
         "yes", "no", "only", "when", "while",
         "manual", "automatic",
         "stiff", "loose", "hard", "soft",
         "noise", "grind", "grinding",
-        "neutral", "force", "won't", "can't"
+        "neutral", "force", "won't", "can't",
     ]
-
     return any(k in text for k in clarification_markers)
 
 
 def remove_redundant_questions(
     questions: List[str],
-    user_input: str
+    user_input: str,
 ) -> List[str]:
     text = user_input.lower()
     cleaned = []
@@ -205,7 +199,7 @@ def apply_obd_logic(resp: Dict[str, Any], user_input: str) -> Dict[str, Any]:
 
 def apply_symptom_guard(
     resp: Dict[str, Any],
-    text: str
+    text: str,
 ) -> Tuple[Dict[str, Any], bool]:
 
     text = text.lower()
@@ -223,17 +217,21 @@ def apply_symptom_guard(
 
 
 # --------------------------------------------------
-# Main agent entry
+# Main agent entry (UPDATED)
 # --------------------------------------------------
 
 def run_vehicle_agent(
     user_input: str,
-    chat_id: UUID,
+    chat_id: UUID | None,
     user_id: str,
     vehicle_id: str | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
 ) -> Dict[str, Any]:
+
+    # 🔑 NEW: generate chat_id for new conversations
+    if chat_id is None:
+        chat_id = uuid4()
 
     history_text = load_short_term_memory(chat_id, limit=5)
     history_structured = load_short_term_memory_structured(chat_id, limit=5)
@@ -259,17 +257,17 @@ def run_vehicle_agent(
         parsed = apply_obd_logic(parsed, user_input)
         parsed, _ = apply_symptom_guard(parsed, combined_input)
 
-        # 🔁 GENERIC PROGRESSION (NO HARDCODING)
         if parsed["action"] == "ASK" and reduces_uncertainty(user_input):
             parsed["confidence"] = min(parsed["confidence"] + 0.15, 0.95)
             parsed["follow_up_questions"] = remove_redundant_questions(
                 parsed["follow_up_questions"],
-                user_input
+                user_input,
             )
 
-        # 🔓 Allow model to lock / escalate when confidence is high
         if parsed["confidence"] > 0.85 and parsed["action"] == "ASK":
             parsed["action"] = "ESCALATE"
+
+        parsed["chat_id"] = str(chat_id)
 
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
         return parsed
@@ -284,6 +282,7 @@ def run_vehicle_agent(
             "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
             "confidence": active.get("confidence", 0.6),
+            "chat_id": str(chat_id),
         }
 
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, fallback)
