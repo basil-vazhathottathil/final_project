@@ -5,16 +5,14 @@ from typing import List, Dict, Any
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from tavily import TavilyClient
 
-from app.config import GROQ_API_KEY, TAVILY_API_KEY
+from app.config import GROQ_API_KEY
 from app.agent.vehicle_prompt import vehicle_prompt
 from app.db.db import (
     load_short_term_memory,
     load_short_term_memory_structured,
     save_chat_turn,
 )
-
 
 # --------------------------------------------------
 # Constants
@@ -37,7 +35,6 @@ WORKSHOP_PATTERNS = [
     "mechanic", "repair shop", "nearby garage"
 ]
 
-
 # --------------------------------------------------
 # LLM setup
 # --------------------------------------------------
@@ -53,23 +50,24 @@ prompt = ChatPromptTemplate.from_messages(
         ("system", vehicle_prompt),
         (
             "human",
-            "Conversation history:\n{conversation_history}\n\nUser issue:\n{user_input}",
+            "Conversation history:\n{conversation_history}\n\nUser update:\n{user_input}",
         ),
     ]
 )
-
 
 # --------------------------------------------------
 # Helpers
 # --------------------------------------------------
 
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
-    match = re.search(r"\{.*\}", text, re.S)
-    if not match:
-        return None
+    """
+    Tolerant JSON extractor – handles extra text before/after JSON.
+    """
     try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except Exception:
         return None
 
 
@@ -101,10 +99,18 @@ def get_last_agent_action(history: List[Dict[str, Any]]) -> str | None:
     return None
 
 
+def get_active_diagnosis(history: List[Dict[str, Any]]) -> str | None:
+    """
+    Retrieves the most recent diagnosis to maintain continuity.
+    """
+    for turn in reversed(history):
+        agent = turn.get("agent")
+        if agent and agent.get("diagnosis"):
+            return agent["diagnosis"]
+    return None
+
+
 def count_consecutive_escalates(history: List[Dict[str, Any]], limit: int = 5) -> int:
-    """
-    Count consecutive ESCALATE actions from the most recent backwards.
-    """
     count = 0
     for turn in reversed(history[-limit:]):
         agent = turn.get("agent")
@@ -149,15 +155,17 @@ def run_vehicle_agent(
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
 
-    history_text = load_short_term_memory(chat_id, limit=5)
-    history_structured = load_short_term_memory_structured(chat_id, limit=5)
+    history_text = load_short_term_memory(chat_id, limit=10)
+    history_structured = load_short_term_memory_structured(chat_id, limit=10)
 
     last_action = get_last_agent_action(history_structured)
     escalate_count = count_consecutive_escalates(history_structured)
+    active_diagnosis = get_active_diagnosis(history_structured)
+
     text = user_input.lower()
 
     # --------------------------------------------------
-    # Direct workshop intent (explicit user request)
+    # Direct workshop intent
     # --------------------------------------------------
     if any(k in text for k in WORKSHOP_PATTERNS):
         response = build_workshop_response(chat_id)
@@ -169,7 +177,7 @@ def run_vehicle_agent(
     # --------------------------------------------------
     if last_action == "ESCALATE" and any(y in text for y in YES_PATTERNS):
         response = {
-            "diagnosis": "Professional help recommended",
+            "diagnosis": active_diagnosis or "Professional help recommended",
             "explanation": "Based on the issue, a professional inspection is advisable.",
             "severity": 0.85,
             "action": "CONFIRM_WORKSHOP",
@@ -189,12 +197,41 @@ def run_vehicle_agent(
         return response
 
     # --------------------------------------------------
-    # Normal LLM flow
+    # DIY SHORT-CIRCUIT: Battery corrosion
     # --------------------------------------------------
+    if "corrosion" in text and "battery" in text:
+        response = {
+            "diagnosis": "Battery terminal corrosion",
+            "explanation": "Corrosion can block electrical flow and prevent starting.",
+            "severity": 0.4,
+            "action": "DIY",
+            "steps": [
+                "Turn off the car and remove the keys",
+                "Disconnect the negative terminal first",
+                "Clean corrosion using baking soda and water",
+                "Reconnect terminals securely"
+            ],
+            "follow_up_questions": [],
+            "youtube_urls": [
+                "https://www.youtube.com/watch?v=YC--MLNIbik"
+            ],
+            "confidence": 0.9,
+            "chat_id": str(chat_id),
+        }
+        save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
+        return response
+
+    # --------------------------------------------------
+    # LLM flow with context injection
+    # --------------------------------------------------
+
+    combined_input = user_input
+    if active_diagnosis:
+        combined_input = f"Current diagnosis: {active_diagnosis}\nUser update: {user_input}"
 
     messages = prompt.format_messages(
         conversation_history=history_text,
-        user_input=user_input,
+        user_input=combined_input,
     )
 
     try:
@@ -216,13 +253,11 @@ def run_vehicle_agent(
                 "This issue has persisted and likely needs professional help. I recommend a workshop. Would you like me to find nearby workshops?"
             ]
 
-        # Normal ESCALATE (permission-based)
         elif parsed["action"] == "ESCALATE":
             parsed["follow_up_questions"] = [
                 "Would you like me to find nearby workshops?"
             ]
 
-        # CONFIRM_WORKSHOP (recommendation-based)
         elif parsed["action"] == "CONFIRM_WORKSHOP":
             parsed["follow_up_questions"] = [
                 "This issue might be severe. I recommend a workshop. Would you like me to find nearby workshops?"
@@ -235,8 +270,8 @@ def run_vehicle_agent(
 
     except Exception:
         fallback = {
-            "diagnosis": "Vehicle issue detected",
-            "explanation": "Thanks for the details. Let’s continue step by step.",
+            "diagnosis": active_diagnosis or "Vehicle issue detected",
+            "explanation": "Thanks for the update. Let’s continue step by step.",
             "severity": 0.6,
             "action": "ASK",
             "steps": [],
