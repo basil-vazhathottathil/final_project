@@ -10,12 +10,13 @@ class ChatRequest(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
 
-
 class AgentResponse(BaseModel):
     diagnosis: str
     explanation: str
     severity: float
-    action: Literal["DIY", "ASK", "ESCALATE"]
-    steps: List[str]
-    follow_up_questions: List[str]
+    action: str
+    steps: list[str]
+    follow_up_questions: list[str]
     confidence: float
+    chat_id: UUID  
+
