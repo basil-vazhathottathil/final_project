@@ -1,7 +1,6 @@
 from datetime import date
 from uuid import UUID
-from app.core.database import supabase
-
+from app.db.db import supabase
 
 def create_maintenance(user_id: str, payload):
     data = payload.dict()
