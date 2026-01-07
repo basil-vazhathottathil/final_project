@@ -4,7 +4,7 @@ from typing import List, Optional, Literal
 
 
 class ChatRequest(BaseModel):
-    chat_id: UUID                 # session id
+    chat_id: Optional[UUID] = None 
     message: str                  # user message
     vehicle_id: Optional[str] = None
     latitude: float | None = None
