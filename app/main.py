@@ -2,6 +2,7 @@ from fastapi import FastAPI
 import logging
 
 from app.routers import vehicle_chat, vehicle_workshops
+from app.routers.maintenance_route import router as maintenance_router
 
 # App setup
 app = FastAPI(
@@ -29,6 +30,7 @@ async def version():
 # Routers
 app.include_router(vehicle_chat.router)
 app.include_router(vehicle_workshops.router)
+app.include_router(maintenance_router)
 
 # Lifecycle logs
 @app.on_event("startup")
