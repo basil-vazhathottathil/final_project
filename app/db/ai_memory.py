@@ -4,6 +4,24 @@ from app.db.db import supabase
 
 
 # --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def make_issue_key(title: str) -> str:
+    """
+    Create a stable, deterministic key for an issue.
+    This MUST NOT depend on severity or wording intensity.
+    """
+    return (
+        title.lower()
+        .strip()
+        .replace("-", " ")
+        .replace("  ", " ")
+        .replace(" ", "_")
+    )
+
+
+# --------------------------------------------------
 # Chat summary (ai_chat_summary)
 # --------------------------------------------------
 
@@ -31,6 +49,7 @@ def upsert_chat_summary(vehicle_id: Optional[str], summary: str) -> None:
     if not vehicle_id:
         return
 
+    # Chat summary is intentionally append-only (historical)
     supabase.table("ai_chat_summary").insert({
         "vehicle_id": vehicle_id,
         "summary": summary,
@@ -38,7 +57,7 @@ def upsert_chat_summary(vehicle_id: Optional[str], summary: str) -> None:
 
 
 # --------------------------------------------------
-# Issues (issues_summary)
+# Issues (issues_summary) — STABLE UPSERT
 # --------------------------------------------------
 
 def load_open_issues(vehicle_id: Optional[str]) -> List[Dict[str, Any]]:
@@ -48,10 +67,10 @@ def load_open_issues(vehicle_id: Optional[str]) -> List[Dict[str, Any]]:
     response = (
         supabase
         .table("issues_summary")
-        .select("id, title, summary, severity")
+        .select("id, issue_key, title, summary, severity")
         .eq("vehicle_id", vehicle_id)
         .is_("resolved_at", None)
-        .order("created_at", desc=True)
+        .order("updated_at", desc=True)
         .execute()
     )
 
@@ -62,9 +81,45 @@ def upsert_issue_from_summary(vehicle_id: Optional[str], issue: Dict[str, Any]) 
     if not vehicle_id:
         return
 
-    supabase.table("issues_summary").insert({
-        "vehicle_id": vehicle_id,
-        "title": issue.get("title"),
-        "summary": issue.get("summary"),
-        "severity": issue.get("severity"),
-    }).execute()
+    title = issue.get("title")
+    if not title:
+        return
+
+    issue_key = make_issue_key(title)
+
+    # --------------------------------------------------
+    # Check if this issue already exists
+    # --------------------------------------------------
+    existing = (
+        supabase
+        .table("issues_summary")
+        .select("id")
+        .eq("vehicle_id", vehicle_id)
+        .eq("issue_key", issue_key)
+        .limit(1)
+        .execute()
+    )
+
+    if existing.data:
+        # -----------------------------
+        # UPDATE existing issue
+        # -----------------------------
+        issue_id = existing.data[0]["id"]
+
+        supabase.table("issues_summary").update({
+            "severity": issue.get("severity"),
+            "summary": issue.get("summary"),
+            "updated_at": "now()",
+        }).eq("id", issue_id).execute()
+
+    else:
+        # -----------------------------
+        # INSERT new issue
+        # -----------------------------
+        supabase.table("issues_summary").insert({
+            "vehicle_id": vehicle_id,
+            "issue_key": issue_key,
+            "title": title,
+            "summary": issue.get("summary"),
+            "severity": issue.get("severity"),
+        }).execute()
