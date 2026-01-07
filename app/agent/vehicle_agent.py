@@ -74,11 +74,15 @@ prompt = ChatPromptTemplate.from_messages(
 
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
     try:
-        start = text.index("{")
-        end = text.rindex("}") + 1
+        # Find first JSON object
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start == -1 or end == -1:
+            return None
         return json.loads(text[start:end])
     except Exception:
         return None
+
 
 
 def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
