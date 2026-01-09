@@ -41,7 +41,7 @@ WORKSHOP_PATTERNS = [
 
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="llama-3.1-8b-instant",
+    model="moonshotai/kimi-k2-instruct-0905",
     temperature=0.2,
 )
 
