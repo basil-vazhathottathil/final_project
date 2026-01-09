@@ -129,10 +129,6 @@ def upsert_issue_from_summary(vehicle_id: Optional[str], issue: Dict[str, Any]) 
 # --------------------------------------------------
 
 def load_chat_issue_summary(chat_id: Optional[str]) -> Optional[str]:
-    """
-    Load the evolving issue summary for a specific chat.
-    This is NOT vehicle-level and NOT historical.
-    """
     if not chat_id:
         return None
 
@@ -141,11 +137,14 @@ def load_chat_issue_summary(chat_id: Optional[str]) -> Optional[str]:
         .table("issues_summary")
         .select("summary")
         .eq("chat_id", chat_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
-    return res.data["summary"] if res.data else None
+    if res.data:
+        return res.data[0]["summary"]
+
+    return None
 
 
 def upsert_chat_issue_summary(
