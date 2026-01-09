@@ -150,6 +150,9 @@ def run_vehicle_agent(
 
     vehicle_chat_summary = load_chat_summary(vehicle_id)
     chat_conversation_summary = load_chat_summary(str(chat_id))
+    if not chat_conversation_summary:
+        chat_conversation_summary = ""  # Default to an empty string if None or invalid
+
     chat_issue_summary = load_chat_issue_summary(str(chat_id))
     open_issues = load_open_issues(vehicle_id)
 
