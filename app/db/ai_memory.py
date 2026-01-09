@@ -38,12 +38,14 @@ def upsert_chat_summary(
     if not chat_id or not vehicle_id:
         return
 
-    supabase.table("ai_chat_summary").upsert({
-        "chat_id": chat_id,
-        "vehicle_id": vehicle_id,
-        "summary": summary,
-        "updated_at": "now()",
-    }).execute()
+    supabase.table("ai_chat_summary").upsert(
+        {
+            "chat_id": chat_id,
+            "vehicle_id": vehicle_id,
+            "summary": summary,
+        },
+        on_conflict="chat_id",
+    ).execute()
 
 
 # issues_summary (vehicle-level issues)
