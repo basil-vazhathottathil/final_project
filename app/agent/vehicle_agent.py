@@ -13,13 +13,12 @@ from app.db.db import (
     save_chat_turn,
 )
 
-# AI memory helpers
 from app.db.ai_memory import (
-    load_chat_summary,                 # ai_chat_summary (chat-level)
-    load_chat_issue_summary,           # issues_summary (chat-level)
-    upsert_chat_issue_summary,         # ai_chat_summary upsert
+    load_chat_summary,
+    upsert_chat_summary,
+    load_chat_issue_summary,
     load_open_issues,
-    upsert_issue_from_summary,         # vehicle-level issues_summary
+    upsert_issue_from_summary,
 )
 
 from app.agent.prompts.summary_prompt import build_summary_prompt
@@ -52,10 +51,9 @@ SYSTEM_PROMPT = f"""
 {vehicle_prompt}
 
 CRITICAL INSTRUCTION:
-- You MUST respond in valid JSON ONLY
-- Do NOT add explanations outside JSON
-- Do NOT use markdown
-- JSON must match the required schema exactly
+- JSON ONLY
+- No markdown
+- No extra text
 """
 
 prompt = ChatPromptTemplate.from_messages(
@@ -69,7 +67,7 @@ prompt = ChatPromptTemplate.from_messages(
 )
 
 
-# Helper functions
+# Helpers
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
     try:
         start = text.find("{")
@@ -131,7 +129,7 @@ def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
     }
 
 
-# Main agent entry
+# Main agent
 def run_vehicle_agent(
     user_input: str,
     chat_id: UUID | None,
@@ -148,30 +146,26 @@ def run_vehicle_agent(
     history_structured = load_short_term_memory_structured(chat_id, limit=10)
     escalate_count = count_consecutive_escalates(history_structured)
 
-    vehicle_chat_summary = load_chat_summary(vehicle_id)
-    chat_conversation_summary = load_chat_summary(str(chat_id))
-    if not chat_conversation_summary:
-        chat_conversation_summary = ""  # Default to an empty string if None or invalid
-
+    vehicle_summary = load_chat_summary(vehicle_id)
+    chat_summary = load_chat_summary(str(chat_id)) or ""
     chat_issue_summary = load_chat_issue_summary(str(chat_id))
     open_issues = load_open_issues(vehicle_id)
 
-    text = user_input.lower()
-    if any(k in text for k in WORKSHOP_PATTERNS):
+    if any(k in user_input.lower() for k in WORKSHOP_PATTERNS):
         response = build_workshop_response(chat_id)
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
         return response
 
     context_blocks = []
 
-    if vehicle_chat_summary:
-        context_blocks.append(f"Vehicle history:\n{vehicle_chat_summary}")
+    if vehicle_summary:
+        context_blocks.append(f"Vehicle history:\n{vehicle_summary}")
 
-    if chat_conversation_summary:
-        context_blocks.append(f"Conversation summary:\n{chat_conversation_summary}")
+    if chat_summary:
+        context_blocks.append(f"Conversation summary:\n{chat_summary}")
 
     if chat_issue_summary:
-        context_blocks.append(f"Current diagnosed issue:\n{chat_issue_summary}")
+        context_blocks.append(f"Current issue:\n{chat_issue_summary}")
 
     if open_issues:
         context_blocks.append(
@@ -190,11 +184,7 @@ def run_vehicle_agent(
 
     try:
         ai_text = llm.invoke(messages).content
-        parsed = safe_json_extract(ai_text)
-
-        if not parsed:
-            raise ValueError("Model did not return JSON")
-
+        parsed = safe_json_extract(ai_text) or {}
         parsed = normalize_agent_response(parsed)
 
         previous_confidence = None
@@ -217,34 +207,35 @@ def run_vehicle_agent(
         parsed["chat_id"] = str(chat_id)
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
 
-        # Update ai_chat_summary incrementally
-        new_turn_text = f"User: {user_input}\nAgent: {parsed['explanation']}"
+        new_turn = f"User: {user_input}\nAgent: {parsed['explanation']}"
 
         summary_prompt = build_summary_prompt(
-            previous_summary=chat_conversation_summary,
-            new_turn=new_turn_text,
+            previous_summary=chat_summary,
+            new_turn=new_turn,
         )
 
-        updated_chat_summary = llm.invoke(summary_prompt).content.strip()
+        updated_summary = llm.invoke(summary_prompt).content.strip()
 
-        if updated_chat_summary and len(updated_chat_summary) > 20:
-            upsert_chat_issue_summary(
+        if updated_summary and len(updated_summary) > 20:
+            upsert_chat_summary(
                 chat_id=str(chat_id),
                 vehicle_id=vehicle_id,
-                summary=updated_chat_summary,
-                severity=None,
+                summary=updated_summary,
             )
 
-        # Promote to issues_summary when confident
         if (
-            updated_chat_summary
+            updated_summary
             and parsed["confidence"] >= 0.7
             and parsed["action"] in {"ESCALATE", "CONFIRM_WORKSHOP"}
         ):
-            issue_prompt = build_issue_prompt(updated_chat_summary)
+            issue_prompt = build_issue_prompt(updated_summary)
             issue_json = safe_json_extract(llm.invoke(issue_prompt).content)
             if issue_json:
-                upsert_issue_from_summary(vehicle_id, issue_json)
+                upsert_issue_from_summary(
+                    vehicle_id=vehicle_id,
+                    chat_id=str(chat_id),
+                    issue=issue_json,
+                )
 
         return parsed
 
