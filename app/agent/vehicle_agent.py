@@ -25,7 +25,6 @@ from app.agent.prompts.summary_prompt import build_summary_prompt
 from app.agent.prompts.issue_prompt import build_issue_prompt
 
 
-# Constants
 SWAGGER_DUMMY_UUID = UUID("3fa85f64-5717-4562-b3fc-2c963f66afa6")
 
 GENERIC_FOLLOW_UP_QUESTIONS = [
@@ -40,7 +39,6 @@ WORKSHOP_PATTERNS = [
 ]
 
 
-# LLM setup
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model="llama-3.1-8b-instant",
@@ -67,7 +65,6 @@ prompt = ChatPromptTemplate.from_messages(
 )
 
 
-# Helpers
 def safe_json_extract(text: str) -> Dict[str, Any] | None:
     try:
         start = text.find("{")
@@ -129,7 +126,6 @@ def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
     }
 
 
-# Main agent
 def run_vehicle_agent(
     user_input: str,
     chat_id: UUID | None,
@@ -139,27 +135,31 @@ def run_vehicle_agent(
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
+    print("STEP 0: entered agent")
+
     if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
         chat_id = uuid4()
+        print("STEP 0.1: generated new chat_id", chat_id)
 
     history_text = load_short_term_memory(chat_id, limit=10)
     history_structured = load_short_term_memory_structured(chat_id, limit=10)
     escalate_count = count_consecutive_escalates(history_structured)
 
-    vehicle_summary = load_chat_summary(vehicle_id)
+    print("STEP 1: loaded history")
+
     chat_summary = load_chat_summary(str(chat_id)) or ""
     chat_issue_summary = load_chat_issue_summary(str(chat_id))
     open_issues = load_open_issues(vehicle_id)
 
+    print("STEP 2: loaded memory layers")
+
     if any(k in user_input.lower() for k in WORKSHOP_PATTERNS):
+        print("STEP 2.1: workshop keyword detected")
         response = build_workshop_response(chat_id)
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, response)
         return response
 
     context_blocks = []
-
-    if vehicle_summary:
-        context_blocks.append(f"Vehicle history:\n{vehicle_summary}")
 
     if chat_summary:
         context_blocks.append(f"Conversation summary:\n{chat_summary}")
@@ -182,10 +182,16 @@ def run_vehicle_agent(
         user_input=combined_input,
     )
 
+    print("STEP 3: before main LLM")
+
     try:
         ai_text = llm.invoke(messages).content
+        print("STEP 4: after main LLM")
+        print("RAW LLM OUTPUT:", ai_text)
+
         parsed = safe_json_extract(ai_text) or {}
         parsed = normalize_agent_response(parsed)
+        print("STEP 5: parsed + normalized")
 
         previous_confidence = None
         if history_structured:
@@ -198,14 +204,9 @@ def run_vehicle_agent(
             parsed["confidence"]
         )
 
-        if parsed["action"] == "ESCALATE" and escalate_count >= 2:
-            parsed["action"] = "CONFIRM_WORKSHOP"
-            parsed["follow_up_questions"] = [
-                "This issue has persisted and likely needs professional help. Would you like me to find nearby workshops?"
-            ]
-
         parsed["chat_id"] = str(chat_id)
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
+        print("STEP 6: saved chat turn")
 
         new_turn = f"User: {user_input}\nAgent: {parsed['explanation']}"
 
@@ -213,8 +214,10 @@ def run_vehicle_agent(
             previous_summary=chat_summary,
             new_turn=new_turn,
         )
+        print("STEP 7: built summary prompt")
 
         updated_summary = llm.invoke(summary_prompt).content.strip()
+        print("STEP 8: after summary LLM", updated_summary)
 
         if updated_summary and len(updated_summary) > 20:
             upsert_chat_summary(
@@ -222,6 +225,7 @@ def run_vehicle_agent(
                 vehicle_id=vehicle_id,
                 summary=updated_summary,
             )
+            print("STEP 9: upserted chat summary")
 
         if (
             updated_summary
@@ -230,16 +234,22 @@ def run_vehicle_agent(
         ):
             issue_prompt = build_issue_prompt(updated_summary)
             issue_json = safe_json_extract(llm.invoke(issue_prompt).content)
+            print("STEP 10: issue extraction", issue_json)
+
             if issue_json:
                 upsert_issue_from_summary(
                     vehicle_id=vehicle_id,
                     chat_id=str(chat_id),
                     issue=issue_json,
                 )
+                print("STEP 11: upserted issue")
 
+        print("STEP 12: returning parsed")
         return parsed
 
-    except Exception:
+    except Exception as e:
+        print("🔥 AGENT ERROR 🔥", repr(e))
+
         fallback = {
             "diagnosis": "Vehicle issue detected",
             "explanation": "Thanks for the update. Let’s continue step by step.",
