@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.routers import vehicle_chat, vehicle_workshops
@@ -8,6 +9,14 @@ from app.routers.maintenance_route import router as maintenance_router
 app = FastAPI(
     title="Vehicle Repair AI Agent",
     version="0.4.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # OK for testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Logging
