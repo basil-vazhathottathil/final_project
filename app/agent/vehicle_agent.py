@@ -204,7 +204,7 @@ def run_vehicle_agent(
             parsed["confidence"]
         )
 
-        parsed["chat_id"] = str(chat_id)
+        parsed["chat_id"] = chat_id
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, parsed)
         print("STEP 6: saved chat turn")
 
@@ -259,7 +259,7 @@ def run_vehicle_agent(
             "follow_up_questions": GENERIC_FOLLOW_UP_QUESTIONS,
             "youtube_urls": [],
             "confidence": 0.6,
-            "chat_id": str(chat_id),
+            "chat_id": chat_id,
         }
 
         save_chat_turn(chat_id, user_id, vehicle_id, user_input, fallback)

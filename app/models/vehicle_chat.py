@@ -19,5 +19,5 @@ class AgentResponse(BaseModel):
     steps: list[str]
     follow_up_questions: list[str]
     confidence: float
-    chat_id: UUID  
-
+    chat_id: UUID
+    youtube_urls: list[str] = []
