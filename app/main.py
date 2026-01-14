@@ -1,52 +1,51 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-import os
+from fastapi.responses import JSONResponse, Response
 import logging
 
 from app.routers import vehicle_chat, vehicle_workshops
 from app.routers.maintenance_route import router as maintenance_router
 
+# App
 app = FastAPI(
     title="Vehicle Repair AI Agent",
-    version="0.4.0"
+    version="0.4.0",
 )
 
-# --------------------------------------------------
-# PRE-FLIGHT HANDLER (MUST COME FIRST)
-# --------------------------------------------------
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# Preflight OPTIONS
 @app.middleware("http")
-async def allow_preflight(request: Request, call_next):
+async def preflight_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return Response(status_code=204)
     return await call_next(request)
 
-# --------------------------------------------------
 # CORS
-# --------------------------------------------------
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8081",
-    ],
+    allow_origins=["http://localhost:8081"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --------------------------------------------------
-# Logging
-# --------------------------------------------------
+# Global exception handler with CORS headers
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled server error")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:8081",
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --------------------------------------------------
 # Health
-# --------------------------------------------------
-
 @app.get("/")
 async def root():
     return {"status": "ok"}
@@ -59,23 +58,17 @@ async def health():
 async def version():
     return {"version": app.version}
 
-# --------------------------------------------------
 # Routers
-# --------------------------------------------------
-
 app.include_router(vehicle_chat.router)
 app.include_router(vehicle_workshops.router)
 app.include_router(maintenance_router)
 
-# --------------------------------------------------
 # Lifecycle
-# --------------------------------------------------
-
 @app.on_event("startup")
 async def startup():
-    logger.info("Agent started")
-    logger.info("CORS enabled for localhost:8081")
+    logger.info("Vehicle Agent started")
+    logger.info("CORS enabled for http://localhost:8081")
 
 @app.on_event("shutdown")
 async def shutdown():
-    logger.info("Agent stopped")
+    logger.info("Vehicle Agent stopped")
