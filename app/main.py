@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import os
 import logging
 
@@ -11,28 +12,40 @@ app = FastAPI(
     version="0.4.0"
 )
 
-# ---- CORS ----
+# --------------------------------------------------
+# PRE-FLIGHT HANDLER (MUST COME FIRST)
+# --------------------------------------------------
 
-raw_origins = os.getenv("CORS_ORIGINS", "")
-allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+@app.middleware("http")
+async def allow_preflight(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=204)
+    return await call_next(request)
+
+# --------------------------------------------------
+# CORS
+# --------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
+    allow_origins=[
+        "http://localhost:8081",
     ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ---- Logging ----
+# --------------------------------------------------
+# Logging
+# --------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---- Health ----
+# --------------------------------------------------
+# Health
+# --------------------------------------------------
 
 @app.get("/")
 async def root():
@@ -46,18 +59,22 @@ async def health():
 async def version():
     return {"version": app.version}
 
-# ---- Routers ----
+# --------------------------------------------------
+# Routers
+# --------------------------------------------------
 
 app.include_router(vehicle_chat.router)
 app.include_router(vehicle_workshops.router)
 app.include_router(maintenance_router)
 
-# ---- Lifecycle ----
+# --------------------------------------------------
+# Lifecycle
+# --------------------------------------------------
 
 @app.on_event("startup")
 async def startup():
     logger.info("Agent started")
-    logger.info("CORS allowed origins: %s", allowed_origins)
+    logger.info("CORS enabled for localhost:8081")
 
 @app.on_event("shutdown")
 async def shutdown():
