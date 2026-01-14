@@ -6,7 +6,7 @@ from typing import List, Optional, Literal
 class ChatRequest(BaseModel):
     chat_id: Optional[UUID] = None
     message: str
-    user_id: str                 # REQUIRED
+    #user_id: str                
     vehicle_id: Optional[str] = None
     latitude: float | None = None
     longitude: float | None = None
