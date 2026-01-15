@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends  # type: ignore
+from fastapi import APIRouter, Depends
 from app.auth.auth import get_current_user_id
 from app.db.db import supabase
-
 
 from app.models.maintenance import (
     MaintenanceCreate,
@@ -16,6 +15,7 @@ from app.services.maintenance_service import (
 )
 
 router = APIRouter(prefix="/maintenance")
+
 
 @router.get("/")
 def list_maintenance(
@@ -32,7 +32,7 @@ def create_maintenance(
     return create_maintenance_service(user_id, payload)
 
 
-@router.put("/{maintenance_id}")
+@router.patch("/{maintenance_id}")  # 🔁 PATCH instead of PUT
 def update_maintenance(
     maintenance_id: str,
     payload: MaintenanceUpdate,
@@ -48,6 +48,7 @@ def delete_maintenance(
 ):
     return delete_maintenance_service(user_id, maintenance_id)
 
+
 @router.get("/rules")
 def list_maintenance_rules():
     return (
@@ -56,4 +57,4 @@ def list_maintenance_rules():
         .select("service_type, display_name, requires_odometer")
         .order("display_name")
         .execute()
-    )
+    ).data
