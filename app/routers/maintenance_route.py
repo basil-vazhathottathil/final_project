@@ -1,6 +1,17 @@
-from fastapi import APIRouter, Depends # type: ignore
+from fastapi import APIRouter, Depends  # type: ignore
 from app.auth.auth import get_current_user_id
-from app.services.maintenance_service import *
+
+from app.models.maintenance import (
+    MaintenanceCreate,
+    MaintenanceUpdate,
+)
+
+from app.services.maintenance_service import (
+    list_maintenance_service,
+    create_maintenance_service,
+    update_maintenance_service,
+    delete_maintenance_service,
+)
 
 router = APIRouter(prefix="/maintenance")
 
