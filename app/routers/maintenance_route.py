@@ -45,3 +45,13 @@ def delete_maintenance(
     user_id: str = Depends(get_current_user_id),
 ):
     return delete_maintenance_service(user_id, maintenance_id)
+
+@router.get("/rules")
+def list_maintenance_rules():
+    return (
+        supabase
+        .table("maintenance_rules")
+        .select("service_type, display_name, requires_odometer")
+        .order("display_name")
+        .execute()
+    )
