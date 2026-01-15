@@ -78,11 +78,24 @@ def update_maintenance_service(user_id: str, maintenance_id: str, payload):
     return res.data[0] if res.data else None
 
 
+# def delete_maintenance_service(user_id: str, maintenance_id: str):
+#     return (
+#         supabase
+#         .table("vehicle_maintenance")
+#         .delete()
+#         .eq("id", maintenance_id)
+#         .execute()
+#     )
+
+
 def delete_maintenance_service(user_id: str, maintenance_id: str):
-    return (
+    res = (
         supabase
         .table("vehicle_maintenance")
         .delete()
         .eq("id", maintenance_id)
         .execute()
     )
+
+    print("DELETE RESULT:", res)  # 👈 DEBUG LOG (Railway logs)
+    return res
