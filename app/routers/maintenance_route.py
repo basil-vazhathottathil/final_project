@@ -32,7 +32,7 @@ def create_maintenance(
     return create_maintenance_service(user_id, payload)
 
 
-@router.patch("/{maintenance_id}")  # 🔁 PATCH instead of PUT
+@router.patch("/{maintenance_id}")  # PATCH is correct for partial updates
 def update_maintenance(
     maintenance_id: str,
     payload: MaintenanceUpdate,
@@ -51,10 +51,12 @@ def delete_maintenance(
 
 @router.get("/rules")
 def list_maintenance_rules():
-    return (
+    res = (
         supabase
         .table("maintenance_rules")
         .select("service_type, display_name, requires_odometer")
         .order("display_name")
         .execute()
-    ).data
+    )
+
+    return res.data
