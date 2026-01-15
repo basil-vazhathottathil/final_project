@@ -58,3 +58,10 @@ async def verify_token(authorization: str = Header(None)):
 
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+async def get_current_user_id(
+    authorization: str = Header(None),
+) -> str:
+    payload = await verify_token(authorization)
+    return payload["sub"]
