@@ -3,13 +3,15 @@ from uuid import UUID
 from app.db.db import supabase
 
 
-def _serialize_uuids(data: dict) -> dict:
+def _serialize_for_json(data: dict) -> dict:
     """
-    Convert UUID objects to strings for JSON serialization
+    Convert non-JSON-serializable objects to safe types
     """
     for k, v in data.items():
         if isinstance(v, UUID):
             data[k] = str(v)
+        elif isinstance(v, date):
+            data[k] = v.isoformat()
     return data
 
 
@@ -30,8 +32,8 @@ def create_maintenance_service(user_id: str, payload):
     # Never override DB defaults
     data.pop("status", None)
 
-    # 🔴 REQUIRED: serialize UUIDs
-    data = _serialize_uuids(data)
+    # 🔴 REQUIRED: serialize UUID + date
+    data = _serialize_for_json(data)
 
     res = (
         supabase
@@ -61,7 +63,8 @@ def update_maintenance_service(user_id: str, maintenance_id: str, payload):
     if data.get("odometer_km") == 0:
         data["odometer_km"] = None
 
-    data = _serialize_uuids(data)
+    # 🔴 Serialize here too
+    data = _serialize_for_json(data)
 
     res = (
         supabase
