@@ -1,23 +1,37 @@
 from datetime import date
+from uuid import UUID
 from app.db.db import supabase
+
+
+def _serialize_uuids(data: dict) -> dict:
+    """
+    Convert UUID objects to strings for JSON serialization
+    """
+    for k, v in data.items():
+        if isinstance(v, UUID):
+            data[k] = str(v)
+    return data
 
 
 def create_maintenance_service(user_id: str, payload):
     data = payload.dict()
 
-    # ✅ Ensure NOT NULL column safety
+    # Ensure NOT NULL safety
     if data.get("service_date") is None:
         data["service_date"] = date.today()
 
-    # ✅ Never send 0 (breaks enforce_odometer trigger)
+    # Trigger safety
     if data.get("odometer_km") == 0:
         data["odometer_km"] = None
 
-    # ✅ Required FK
+    # FK requirement
     data["user_id"] = user_id
 
-    # ❌ NEVER override DB defaults
+    # Never override DB defaults
     data.pop("status", None)
+
+    # 🔴 REQUIRED: serialize UUIDs
+    data = _serialize_uuids(data)
 
     res = (
         supabase
@@ -38,23 +52,23 @@ def list_maintenance_service(user_id: str):
         .order("created_at", desc=True)
         .execute()
     )
-
     return res.data
 
 
 def update_maintenance_service(user_id: str, maintenance_id: str, payload):
     data = payload.dict(exclude_unset=True)
 
-    # ✅ Prevent trigger failure
     if data.get("odometer_km") == 0:
         data["odometer_km"] = None
+
+    data = _serialize_uuids(data)
 
     res = (
         supabase
         .table("vehicle_maintenance")
         .update(data)
         .eq("id", maintenance_id)
-        .eq("user_id", user_id)  # ownership enforced
+        .eq("user_id", user_id)
         .execute()
     )
 
@@ -70,5 +84,4 @@ def delete_maintenance_service(user_id: str, maintenance_id: str):
         .eq("user_id", user_id)
         .execute()
     )
-
     return {"deleted": True}
