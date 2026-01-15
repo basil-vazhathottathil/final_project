@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends  # type: ignore
 from app.auth.auth import get_current_user_id
+from app.db.db import supabase
+
 
 from app.models.maintenance import (
     MaintenanceCreate,
