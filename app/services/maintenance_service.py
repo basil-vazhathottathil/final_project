@@ -79,12 +79,10 @@ def update_maintenance_service(user_id: str, maintenance_id: str, payload):
 
 
 def delete_maintenance_service(user_id: str, maintenance_id: str):
-    (
+    return (
         supabase
         .table("vehicle_maintenance")
         .delete()
         .eq("id", maintenance_id)
-        .eq("user_id", user_id)
         .execute()
     )
-    return {"deleted": True}
