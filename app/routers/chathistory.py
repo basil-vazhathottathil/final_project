@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.db.db import supabase
-from app.auth import get_current_user
+from app.auth import get_current_user_id
 
 router = APIRouter(prefix="/chat", tags=["Chat History"])
 
 #gives last row for each chat_id for history card in frontend
 @router.get("/history")
-async def get_chat_history(user=Depends(get_current_user)):
+async def get_chat_history(user=Depends(get_current_user_id)):
     res = supabase.table("ai_chat_history") \
         .select("chat_id, prompt, response_ai, created_at") \
         .eq("user_id", user.id) \
@@ -40,7 +40,7 @@ async def get_chat_history(user=Depends(get_current_user)):
 
 #loads all messages for a specific chat_id
 @router.get("/{chat_id}")
-async def get_chat(chat_id: str, user=Depends(get_current_user)):
+async def get_chat(chat_id: str, user=Depends(get_current_user_id)):
     res = supabase.table("ai_chat_history") \
         .select("prompt, response_ai, created_at") \
         .eq("chat_id", chat_id) \
