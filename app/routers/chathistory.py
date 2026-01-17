@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.db.db import supabase
-from app.auth import get_current_user_id
+from app.auth.auth import get_current_user_id
 
 router = APIRouter(prefix="/chat", tags=["Chat History"])
 
