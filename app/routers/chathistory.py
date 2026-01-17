@@ -20,6 +20,8 @@ async def get_chat_history(user=Depends(get_current_user_id)):
 
     for row in res.data:
         cid = row["chat_id"]
+        if not cid:
+            continue
 
         if cid not in conversations:
             conversations[cid] = {
