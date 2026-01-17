@@ -9,7 +9,7 @@ router = APIRouter(prefix="/chat", tags=["Chat History"])
 async def get_chat_history(user=Depends(get_current_user_id)):
     res = supabase.table("ai_chat_history") \
         .select("chat_id, prompt, response_ai, created_at") \
-        .eq("user_id", user.id) \
+        .eq("user_id", user) \
         .order("created_at", desc=True) \
         .execute()
 
@@ -46,7 +46,7 @@ async def get_chat(chat_id: str, user=Depends(get_current_user_id)):
     res = supabase.table("ai_chat_history") \
         .select("prompt, response_ai, created_at") \
         .eq("chat_id", chat_id) \
-        .eq("user_id", user.id) \
+        .eq("user_id", user) \
         .order("created_at") \
         .execute()
 
