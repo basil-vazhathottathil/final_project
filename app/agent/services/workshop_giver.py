@@ -18,10 +18,12 @@ tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 def build_place_url(place_id: str) -> str:
     """
-    Builds the exact Google Maps Place Details page URL
-    (Directions / Call / Reviews / Photos)
+    Mobile + desktop compatible Google Maps deep link
     """
-    return f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+    return (
+        "https://www.google.com/maps/search/"
+        f"?api=1&query=place_id:{place_id}"
+    )
 
 
 def extract_maps_place_links_from_web(lat: float, lng: float) -> List[str]:
