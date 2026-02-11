@@ -126,7 +126,7 @@ def count_consecutive_escalates(history: List[Dict[str, Any]], limit: int = 5) -
     return count
 
 
-def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
+def build_workshop_response(chat_id: str) -> Dict[str, Any]:
     return {
         "diagnosis": "Professional assistance recommended",
         "explanation": "Here are nearby workshops that can help with this issue.",
@@ -143,27 +143,27 @@ def build_workshop_response(chat_id: UUID) -> Dict[str, Any]:
 
 def run_vehicle_agent(
     user_input: str,
-    chat_id: UUID | None,
+    chat_id: str | None,
     user_id: str,
     vehicle_id: str | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
 ) -> Dict[str, Any]:
 
-    if chat_id is None or chat_id == SWAGGER_DUMMY_UUID:
-        chat_id = uuid4()
+    if chat_id is None or chat_id == str(SWAGGER_DUMMY_UUID):
+        chat_id = str(uuid4())
 
     history_text = load_short_term_memory(chat_id, limit=10)
     history_structured = load_short_term_memory_structured(chat_id, limit=10)
 
-    chat_summary = load_chat_summary(str(chat_id)) or ""
-    chat_issue_summary = load_chat_issue_summary(str(chat_id))
+    chat_summary = load_chat_summary(chat_id) or ""
+    chat_issue_summary = load_chat_issue_summary(chat_id)
     open_issues = load_open_issues(vehicle_id)
 
     if any(k in user_input.lower() for k in WORKSHOP_PATTERNS):
         response = build_workshop_response(chat_id)
         save_chat_turn(
-            str(chat_id),
+            chat_id,
             user_id,
             vehicle_id,
             user_input,
@@ -216,7 +216,7 @@ def run_vehicle_agent(
         parsed["chat_id"] = chat_id
 
         save_chat_turn(
-            str(chat_id),
+            chat_id,
             user_id,
             vehicle_id,
             user_input,
@@ -234,7 +234,7 @@ def run_vehicle_agent(
 
         if updated_summary and len(updated_summary) > 20:
             upsert_chat_summary(
-                chat_id=str(chat_id),
+                chat_id=chat_id,
                 vehicle_id=vehicle_id,
                 summary=updated_summary,
             )
@@ -250,7 +250,7 @@ def run_vehicle_agent(
             if issue_json:
                 upsert_issue_from_summary(
                     vehicle_id=vehicle_id,
-                    chat_id=str(chat_id),
+                    chat_id=chat_id,
                     issue=issue_json,
                 )
 
@@ -270,7 +270,7 @@ def run_vehicle_agent(
         }
 
         save_chat_turn(
-            str(chat_id),
+            chat_id,
             user_id,
             vehicle_id,
             user_input,
