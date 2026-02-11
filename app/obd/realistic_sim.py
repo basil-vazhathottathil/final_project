@@ -49,7 +49,7 @@ class RealisticOBDSimulator:
 
     def _maybe_trigger_overheat(self):
         # After 90 seconds, 20% chance of overheat event
-        if self.time_running > 90 and not self.overheat_triggered:
+        if self.time_running > 20 and not self.overheat_triggered:
             if random.random() < 0.2:
                 print("🔥 SIMULATED OVERHEAT EVENT")
                 self.coolant_temp = 110
