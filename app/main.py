@@ -26,19 +26,16 @@ async def preflight_middleware(request: Request, call_next):
         return Response(status_code=204)
     return await call_next(request)
 
-# CORS (FINAL, CORRECT)
+# CORS (DEVELOPMENT - OPEN TO ALL)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8081",
-        "https://finalproject-production-fcdc.up.railway.app",
-    ],
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global exception handler (DO NOT hardcode origin)
+# Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled server error")
@@ -46,7 +43,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal Server Error"},
         headers={
-            "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
+            "Access-Control-Allow-Origin": "*",  # Open for development
             "Access-Control-Allow-Credentials": "true",
         },
     )

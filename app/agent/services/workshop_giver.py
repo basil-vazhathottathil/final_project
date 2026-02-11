@@ -18,12 +18,11 @@ tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 def build_place_url(place_id: str) -> str:
     """
-    Mobile + desktop compatible Google Maps deep link
+    Universal Google Maps link that works on mobile and desktop.
+    On mobile: Opens in Google Maps app if installed, otherwise browser.
+    On desktop: Opens in browser.
     """
-    return (
-        "https://www.google.com/maps/search/"
-        f"?api=1&query=place_id:{place_id}"
-    )
+    return f"https://www.google.com/maps/search/?api=1&query=Google&query_place_id={place_id}"
 
 
 def extract_maps_place_links_from_web(lat: float, lng: float) -> List[str]:
