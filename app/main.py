@@ -6,6 +6,8 @@ import logging
 from app.routers import vehicle_chat, vehicle_workshops
 from app.routers.maintenance_route import router as maintenance_router
 from app.routers import chathistory 
+from app.routers import obd_ws
+
 
 # App
 app = FastAPI(
@@ -77,3 +79,6 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("Vehicle Agent stopped")
+
+#obd
+app.include_router(obd_ws.router)
