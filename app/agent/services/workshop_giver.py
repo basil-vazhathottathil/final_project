@@ -16,13 +16,20 @@ tavily = TavilyClient(api_key=TAVILY_API_KEY)
 # Helpers
 # -------------------------------------------------
 
-def build_place_url(place_id: str) -> str:
+def build_place_url(place_id: str, name: str = "", lat: float = None, lng: float = None) -> str:
     """
-    Universal Google Maps link that works on mobile and desktop.
+    Google Maps link that reliably opens in Maps app on mobile.
+    Uses direct maps.google.com URL with coordinates and place name.
     On mobile: Opens in Google Maps app if installed, otherwise browser.
     On desktop: Opens in browser.
     """
-    return f"https://www.google.com/maps/search/?api=1&query=Google&query_place_id={place_id}"
+    if lat and lng and name:
+        # Use coordinates + name - most reliable for mobile
+        encoded_name = name.replace(" ", "+")
+        return f"https://maps.google.com/?q={lat},{lng}+({encoded_name})"
+    else:
+        # Fallback to place_id only
+        return f"https://maps.google.com/?q=place_id:{place_id}"
 
 
 def extract_maps_place_links_from_web(lat: float, lng: float) -> List[str]:
@@ -91,10 +98,6 @@ def _find_nearby_workshops(input: dict) -> dict:
         res = requests.get(PLACES_URL, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
-        # print("GOOGLE_MAPS_KEY LOADED:", bool(GOOGLE_MAPS_KEY))
-        # print("PLACES REQUEST PARAMS:", params)
-        # print("PLACES RAW RESPONSE:", data)
-
 
         results = data.get("results", [])
 
@@ -102,8 +105,16 @@ def _find_nearby_workshops(input: dict) -> dict:
             maps_urls: List[str] = []
             for place in results[:5]:
                 place_id = place.get("place_id")
+                name = place.get("name", "")
+                geometry = place.get("geometry", {})
+                location = geometry.get("location", {})
+                place_lat = location.get("lat")
+                place_lng = location.get("lng")
+                
                 if place_id:
-                    maps_urls.append(build_place_url(place_id))
+                    # Build URL with all available data for best mobile experience
+                    url = build_place_url(place_id, name, place_lat, place_lng)
+                    maps_urls.append(url)
 
             if maps_urls:
                 return {"maps_urls": maps_urls}
