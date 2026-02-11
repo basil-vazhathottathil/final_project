@@ -1,23 +1,14 @@
 # app/obd/ws_listener.py
 
 import asyncio
-import random
-from typing import Dict
-
 from fastapi import WebSocket
 
-from app.obd.decoder import OBDDecoder
 from app.telemetry.processor import TelemetryProcessor
 from app.services.incident_service import IncidentService
+from app.obd.realistic_sim import realistic_obd_stream
 
-
-SUPPORTED_PIDS = [
-    "SPEED",
-    "RPM",
-    "COOLANT_TEMP",
-    "ENGINE_LOAD",
-    "THROTTLE_POS",
-]
+# from app.obd.decoder import OBDDecoder   # 🔹 Needed for real OBD
+# import json                               # 🔹 Needed for real WebSocket input
 
 
 async def obd_stream_handler(
@@ -26,32 +17,23 @@ async def obd_stream_handler(
     vehicle_id: str,
 ):
     """
-    Handles live OBD stream for an authenticated user + vehicle.
+    Handles live OBD stream.
+
+    Currently uses realistic simulator.
+    Real OBD integration code is preserved as comments.
     """
 
     try:
-        while True:
-            pid = random.choice(SUPPORTED_PIDS)
+        # ==============================
+        # 🔹 SIMULATED REALISTIC STREAM
+        # ==============================
 
-            if pid == "SPEED":
-                value = random.randint(0, 120)
-            elif pid == "RPM":
-                value = random.randint(700, 4500)
-            elif pid == "COOLANT_TEMP":
-                value = random.randint(70, 115)
-            elif pid == "ENGINE_LOAD":
-                value = random.randint(10, 90)
-            elif pid == "THROTTLE_POS":
-                value = random.randint(5, 80)
-            else:
-                value = 0
+        async for decoded in realistic_obd_stream():
 
-            decoded = OBDDecoder.decode(pid, value)
-
-            # 🔍 Run telemetry
+            # 🔍 Run telemetry threshold checks
             alerts = TelemetryProcessor.process(decoded)
 
-            # 🚨 Create incident if needed
+            # 🚨 Create incidents if thresholds breached
             for alert in alerts:
                 print("🚨 ALERT TRIGGERED:", alert)
 
@@ -64,12 +46,51 @@ async def obd_stream_handler(
 
             # 📡 Send live data to frontend
             await websocket.send_json({
-                "pid": pid,
                 "decoded": decoded,
                 "alerts": alerts,
             })
 
-            await asyncio.sleep(1)
+        # ==========================================
+        # 🔹 REAL OBD IMPLEMENTATION (FUTURE USE)
+        # ==========================================
+        #
+        # while True:
+        #
+        #     # 1️⃣ Receive raw OBD message from client/device
+        #     raw_message = await websocket.receive_text()
+        #
+        #     # Example raw format:
+        #     # {"pid": "COOLANT_TEMP", "value": 105}
+        #
+        #     data = json.loads(raw_message)
+        #
+        #     pid = data.get("pid")
+        #     value = data.get("value")
+        #
+        #     # 2️⃣ Decode PID
+        #     decoded = OBDDecoder.decode(pid, value)
+        #
+        #     # 3️⃣ Run telemetry
+        #     alerts = TelemetryProcessor.process(decoded)
+        #
+        #     # 4️⃣ Trigger incident if needed
+        #     for alert in alerts:
+        #         IncidentService.create_incident(
+        #             user_id=user_id,
+        #             vehicle_id=vehicle_id,
+        #             snapshot=decoded,
+        #             alert=alert,
+        #         )
+        #
+        #     # 5️⃣ Send processed result back
+        #     await websocket.send_json({
+        #         "decoded": decoded,
+        #         "alerts": alerts,
+        #     })
+        #
 
     except Exception as e:
-        print("WebSocket disconnected:", e)
+        print("WebSocket error:", e)
+
+    finally:
+        print("WebSocket connection closed")
