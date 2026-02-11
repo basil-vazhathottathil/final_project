@@ -9,6 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .env
-sup.py
-obd_codes.json
 tele.py
+obd_codes.json
+cool.py
