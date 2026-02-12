@@ -1,6 +1,5 @@
 # Database helpers for AI chat sessions (short-term memory)
 
-from uuid import UUID
 from typing import List, Dict, Any
 
 from supabase import create_client  # type: ignore
@@ -22,7 +21,7 @@ supabase = create_client(
 # --------------------------------------------------
 
 def save_chat_turn(
-    chat_id: UUID,
+    chat_id: str,
     user_id: str,
     vehicle_id: str | None,
     prompt: str,
@@ -33,7 +32,7 @@ def save_chat_turn(
     `response_ai` MUST be a parsed JSON dict.
     """
     supabase.table("ai_chat_history").insert({
-        "chat_id": str(chat_id),
+        "chat_id": chat_id,
         "user_id": user_id,
         "vehicle_id": vehicle_id,
         "prompt": prompt,
@@ -45,7 +44,7 @@ def save_chat_turn(
 # Load short-term memory (TEXT, for LLM context)
 # --------------------------------------------------
 
-def load_short_term_memory(chat_id: UUID, limit: int = 5) -> str:
+def load_short_term_memory(chat_id: str, limit: int = 5) -> str:
     """
     Returns conversation history as plain text.
     Used ONLY for LLM conversational context.
@@ -54,7 +53,7 @@ def load_short_term_memory(chat_id: UUID, limit: int = 5) -> str:
         supabase
         .table("ai_chat_history")
         .select("prompt, response_ai")
-        .eq("chat_id", str(chat_id))
+        .eq("chat_id", chat_id)
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
@@ -84,7 +83,7 @@ def load_short_term_memory(chat_id: UUID, limit: int = 5) -> str:
 # --------------------------------------------------
 
 def load_short_term_memory_structured(
-    chat_id: UUID,
+    chat_id: str,
     limit: int = 5
 ) -> List[Dict[str, Any]]:
     """
@@ -106,7 +105,7 @@ def load_short_term_memory_structured(
         supabase
         .table("ai_chat_history")
         .select("prompt, response_ai")
-        .eq("chat_id", str(chat_id))
+        .eq("chat_id", chat_id)
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
