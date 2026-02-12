@@ -7,6 +7,7 @@ from app.routers import vehicle_chat, vehicle_workshops
 from app.routers.maintenance_route import router as maintenance_router
 from app.routers import chathistory 
 from app.routers import obd_ws
+from app.routers import incidents
 
 
 # App
@@ -66,6 +67,7 @@ app.include_router(vehicle_chat.router)
 app.include_router(vehicle_workshops.router)
 app.include_router(maintenance_router)
 app.include_router(chathistory.router)
+app.include_router(incidents.router)
 
 # Lifecycle
 @app.on_event("startup")
