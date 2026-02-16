@@ -5,8 +5,7 @@ from typing import List, Optional, Literal
 class ChatRequest(BaseModel):
     chat_id: Optional[str] = None
     message: str
-    #user_id: str                
-    vehicle_id: Optional[str] = None
+    # vehicle_id removed - comes from active session via get_active_vehicle dependency
     latitude: float | None = None
     longitude: float | None = None
 

@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 from typing import Optional
 
-from app.auth.auth import verify_token
+from app.auth.auth import verify_token, get_active_vehicle
 from app.db.db import supabase
 
 router = APIRouter(
@@ -22,18 +22,20 @@ class UpdateStatusRequest(BaseModel):
 async def get_incidents_history(
     _=Depends(security),
     user=Depends(verify_token),
+    vehicle_id: str = Depends(get_active_vehicle),  # Auto-fetch from active session
 ):
     """
-    Get all incidents for the authenticated user.
+    Get all incidents for the active vehicle.
     Returns incidents sorted by severity (high first) and created_at (newest first).
     """
     user_id = user["sub"]
     
     try:
-        # Fetch all incidents for user
+        # Fetch incidents for active vehicle only
         res = supabase.table("vehicle_incidents") \
             .select("*") \
             .eq("user_id", user_id) \
+            .eq("vehicle_id", vehicle_id) \
             .order("created_at", desc=True) \
             .execute()
         
@@ -63,9 +65,11 @@ async def get_incident(
     incident_id: str,
     _=Depends(security),
     user=Depends(verify_token),
+    vehicle_id: str = Depends(get_active_vehicle),  # Auto-fetch from active session
 ):
     """
     Get details for a specific incident.
+    Ensures incident belongs to active vehicle.
     """
     user_id = user["sub"]
     
@@ -74,6 +78,7 @@ async def get_incident(
             .select("*") \
             .eq("id", incident_id) \
             .eq("user_id", user_id) \
+            .eq("vehicle_id", vehicle_id) \
             .single() \
             .execute()
         
@@ -95,9 +100,11 @@ async def update_incident_status(
     req: UpdateStatusRequest,
     _=Depends(security),
     user=Depends(verify_token),
+    vehicle_id: str = Depends(get_active_vehicle),  # Auto-fetch from active session
 ):
     """
     Update the status of an incident (open/resolved).
+    Ensures incident belongs to active vehicle.
     """
     user_id = user["sub"]
     
@@ -109,11 +116,12 @@ async def update_incident_status(
         )
     
     try:
-        # First verify the incident belongs to the user
+        # Verify the incident belongs to the user and active vehicle
         check = supabase.table("vehicle_incidents") \
             .select("id") \
             .eq("id", incident_id) \
             .eq("user_id", user_id) \
+            .eq("vehicle_id", vehicle_id) \
             .single() \
             .execute()
         
