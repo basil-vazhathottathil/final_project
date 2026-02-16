@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from fastapi.responses import JSONResponse, Response # type: ignore
 import logging
 
-from app.routers import vehicle_chat, vehicle_workshops
+from app.routers import vehicle_chat, vehicle_workshops, vehicle_router
 from app.routers.maintenance_route import router as maintenance_router
 from app.routers import chathistory 
 from app.routers import obd_ws
@@ -63,11 +63,13 @@ async def version():
     return {"version": app.version}
 
 # Routers
+app.include_router(vehicle_router.router)  # Vehicle management (identify, switch, etc.)
 app.include_router(vehicle_chat.router)
 app.include_router(vehicle_workshops.router)
 app.include_router(maintenance_router)
 app.include_router(chathistory.router)
 app.include_router(incidents.router)
+app.include_router(obd_ws.router)  # OBD WebSocket
 
 # Lifecycle
 @app.on_event("startup")
@@ -78,6 +80,3 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("Vehicle Agent stopped")
-
-#obd
-app.include_router(obd_ws.router)
