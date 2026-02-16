@@ -65,3 +65,31 @@ async def get_current_user_id(
 ) -> str:
     payload = await verify_token(authorization)
     return payload["sub"]
+
+
+async def get_active_vehicle(
+    authorization: str = Header(None),
+) -> str:
+    """
+    Dependency that returns the active vehicle_id for the authenticated user.
+    Raises 403 if no active vehicle session exists.
+    
+    Usage:
+        @router.post("/endpoint")
+        async def endpoint(vehicle_id: str = Depends(get_active_vehicle)):
+            ...
+    """
+    from app.db.vehicle_session import get_active_vehicle_id
+    
+    payload = await verify_token(authorization)
+    user_id = payload["sub"]
+    
+    vehicle_id = get_active_vehicle_id(user_id)
+    
+    if not vehicle_id:
+        raise HTTPException(
+            status_code=403,
+            detail="No active vehicle session. Please identify a vehicle first."
+        )
+    
+    return vehicle_id

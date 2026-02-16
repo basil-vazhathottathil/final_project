@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.auth.auth import get_current_user_id
+from app.auth.auth import get_current_user_id, get_active_vehicle
 from app.db.db import supabase
 
 from app.models.maintenance import (
@@ -20,24 +20,30 @@ router = APIRouter(prefix="/maintenance")
 @router.get("/")
 def list_maintenance(
     user_id: str = Depends(get_current_user_id),
+    vehicle_id: str = Depends(get_active_vehicle),
 ):
-    return list_maintenance_service(user_id)
+    """List maintenance records for active vehicle."""
+    return list_maintenance_service(user_id, vehicle_id)
 
 
 @router.post("/")
 def create_maintenance(
     payload: MaintenanceCreate,
     user_id: str = Depends(get_current_user_id),
+    vehicle_id: str = Depends(get_active_vehicle),
 ):
-    return create_maintenance_service(user_id, payload)
+    """Create maintenance record for active vehicle."""
+    return create_maintenance_service(user_id, vehicle_id, payload)
 
 
-@router.patch("/{maintenance_id}")  # PATCH is correct for partial updates
+@router.patch("/{maintenance_id}")
 def update_maintenance(
     maintenance_id: str,
     payload: MaintenanceUpdate,
     user_id: str = Depends(get_current_user_id),
+    vehicle_id: str = Depends(get_active_vehicle),
 ):
+    """Update maintenance record (ensures it belongs to active vehicle)."""
     return update_maintenance_service(user_id, maintenance_id, payload)
 
 
@@ -45,12 +51,15 @@ def update_maintenance(
 def delete_maintenance(
     maintenance_id: str,
     user_id: str = Depends(get_current_user_id),
+    vehicle_id: str = Depends(get_active_vehicle),
 ):
+    """Delete maintenance record (ensures it belongs to active vehicle)."""
     return delete_maintenance_service(user_id, maintenance_id)
 
 
 @router.get("/rules")
 def list_maintenance_rules():
+    """Get available maintenance rule types."""
     res = (
         supabase
         .table("maintenance_rules")

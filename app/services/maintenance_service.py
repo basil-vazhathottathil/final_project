@@ -15,7 +15,7 @@ def _serialize_for_json(data: dict) -> dict:
     return data
 
 
-def create_maintenance_service(user_id: str, payload):
+def create_maintenance_service(user_id: str, vehicle_id: str, payload):
     data = payload.dict()
 
     # Ensure NOT NULL safety
@@ -26,8 +26,9 @@ def create_maintenance_service(user_id: str, payload):
     if data.get("odometer_km") == 0:
         data["odometer_km"] = None
 
-    # FK requirement
+    # FK requirements
     data["user_id"] = user_id
+    data["vehicle_id"] = vehicle_id
 
     # Never override DB defaults
     data.pop("status", None)
@@ -45,12 +46,13 @@ def create_maintenance_service(user_id: str, payload):
     return res.data[0] if res.data else None
 
 
-def list_maintenance_service(user_id: str):
+def list_maintenance_service(user_id: str, vehicle_id: str):
     res = (
         supabase
         .table("vehicle_maintenance")
         .select("*")
         .eq("user_id", user_id)
+        .eq("vehicle_id", vehicle_id)
         .order("created_at", desc=True)
         .execute()
     )

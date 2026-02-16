@@ -1,13 +1,11 @@
-from uuid import UUID
 from pydantic import BaseModel # type: ignore
 from typing import List, Optional, Literal
 
 
 class ChatRequest(BaseModel):
-    chat_id: Optional[UUID] = None
+    chat_id: Optional[str] = None
     message: str
-    #user_id: str                
-    vehicle_id: Optional[str] = None
+    # vehicle_id removed - comes from active session via get_active_vehicle dependency
     latitude: float | None = None
     longitude: float | None = None
 
@@ -19,5 +17,5 @@ class AgentResponse(BaseModel):
     steps: list[str]
     follow_up_questions: list[str]
     confidence: float
-    chat_id: UUID
+    chat_id: str
     youtube_urls: list[str] = []
