@@ -91,11 +91,9 @@ def create_vehicle(user_id: str, vin: str, model: str | None = None) -> Dict[str
     """
     vehicle_data = {
         "user_id": user_id,
-        "vin": vin
+        "vin": vin,
+        "model": model if model else "Unknown"  # Default to "Unknown" if model not provided
     }
-    
-    if model:
-        vehicle_data["model"] = model
     
     response = supabase.table("vehicles").insert(vehicle_data).execute()
     
