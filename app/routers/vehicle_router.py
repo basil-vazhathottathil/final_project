@@ -22,6 +22,8 @@ from app.db.vehicle_session import (
     get_user_vehicles,
     get_active_vehicle_id,
     get_vehicle_by_id,
+    get_user_vehicle_without_vin,
+    update_vehicle_vin,
 )
 
 router = APIRouter(
@@ -41,9 +43,14 @@ async def identify_vehicle(
     """
     Identify or register a vehicle by VIN.
     
-    If vehicle exists:
+    If vehicle exists by VIN:
         - Ensure it belongs to user
         - Create new active session
+        - Return vehicle_id and is_new=false
+    
+    If vehicle doesn't exist but user has one vehicle without VIN:
+        - Update that vehicle's VIN
+        - Create active session
         - Return vehicle_id and is_new=false
     
     If vehicle doesn't exist:
@@ -54,7 +61,7 @@ async def identify_vehicle(
     user_id = user["sub"]
     vin = req.vin.upper()  # Normalize VIN to uppercase
     
-    # Check if vehicle already exists
+    # Check if vehicle already exists by VIN
     existing_vehicle = get_vehicle_by_vin(vin)
     
     if existing_vehicle:
@@ -75,19 +82,33 @@ async def identify_vehicle(
             model=existing_vehicle.get("model")
         )
     
-    else:
-        # Create new vehicle
-        new_vehicle = create_vehicle(user_id, vin, req.model)
-        
-        # Create active session
-        create_vehicle_session(user_id, new_vehicle["id"])
+    # Vehicle not found by VIN - check if user has a vehicle without VIN
+    vehicle_without_vin = get_user_vehicle_without_vin(user_id)
+    
+    if vehicle_without_vin:
+        # Update existing vehicle's VIN instead of creating new one
+        updated_vehicle = update_vehicle_vin(vehicle_without_vin["id"], vin)
+        create_vehicle_session(user_id, updated_vehicle["id"])
         
         return VehicleIdentifyResponse(
-            vehicle_id=new_vehicle["id"],
-            is_new=True,
-            vin=new_vehicle["vin"],
-            model=new_vehicle.get("model")
+            vehicle_id=updated_vehicle["id"],
+            is_new=False,  # Not new, just updated with VIN
+            vin=updated_vehicle["vin"],
+            model=updated_vehicle.get("model")
         )
+    
+    # No existing vehicle found - create new one
+    new_vehicle = create_vehicle(user_id, vin, req.model)
+    
+    # Create active session
+    create_vehicle_session(user_id, new_vehicle["id"])
+    
+    return VehicleIdentifyResponse(
+        vehicle_id=new_vehicle["id"],
+        is_new=True,
+        vin=new_vehicle["vin"],
+        model=new_vehicle.get("model")
+    )
 
 
 @router.get("/current", response_model=VehicleResponse)

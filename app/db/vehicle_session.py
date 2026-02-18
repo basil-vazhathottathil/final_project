@@ -138,3 +138,39 @@ def get_vehicle_by_id(vehicle_id: str, user_id: str) -> Dict[str, Any] | None:
     except APIError:
         # Vehicle not found
         return None
+
+
+def get_user_vehicle_without_vin(user_id: str) -> Dict[str, Any] | None:
+    """
+    Get a user's vehicle that doesn't have a VIN yet.
+    Returns None if user has 0 or >1 vehicles without VIN.
+    Only returns a vehicle if user has exactly one vehicle without a VIN.
+    """
+    response = (
+        supabase
+        .table("vehicles")
+        .select("*")
+        .eq("user_id", user_id)
+        .is_("vin", "null")
+        .execute()
+    )
+    
+    # Only return if exactly one vehicle without VIN
+    if response.data and len(response.data) == 1:
+        return response.data[0]
+    return None
+
+
+def update_vehicle_vin(vehicle_id: str, vin: str) -> Dict[str, Any]:
+    """
+    Update a vehicle's VIN.
+    """
+    response = (
+        supabase
+        .table("vehicles")
+        .update({"vin": vin})
+        .eq("id", vehicle_id)
+        .execute()
+    )
+    
+    return response.data[0] if response.data else {}
