@@ -58,6 +58,23 @@ SEVERITY GUIDANCE
   when severity is high (≈0.75+) and confidence is reasonable.
 
 --------------------------------------------------
+CRITICAL EMERGENCY PROTOCOL (URGENT)
+--------------------------------------------------
+If the user's input indicates a life-threatening or highly dangerous situation 
+(e.g., FIRE, SMOKE, BRAKE FAILURE, FUEL LEAK, COPS/CRASH):
+
+1. IMMEDIATE WARNING: The 'explanation' MUST start with a clear safety warning 
+   in ALL CAPS (e.g., "STOP THE VEHICLE SAFELY IMMEDIATELY AND EVACUATE.").
+2. STABILIZATION: Provide 1-2 immediate, concise steps to stabilize the situation
+   (e.g., "Turn off the engine.", "Call 000/101/emergency services.").
+3. ACTION: Force 'action' to ESCALATE or CONFIRM_WORKSHOP.
+4. SEVERITY: Force 'severity' to 1.0.
+5. CONFIDENCE: Set 'confidence' to 1.0.
+
+Do not ask follow-up questions during an active fire or major safety failure.
+Focus entirely on life safety first.
+
+--------------------------------------------------
 OUTPUT RULES (STRICT)
 --------------------------------------------------
 - Respond in VALID JSON ONLY.
