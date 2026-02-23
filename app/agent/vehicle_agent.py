@@ -23,6 +23,7 @@ from app.db.ai_memory import (
 
 from app.agent.prompts.summary_prompt import build_summary_prompt
 from app.agent.prompts.issue_prompt import build_issue_prompt
+from app.agent.tools.youtube_search import search_youtube_videos
 
 
 # Dummy UUID used by Swagger
@@ -212,6 +213,13 @@ def run_vehicle_agent(
             previous_confidence,
             parsed["confidence"]
         )
+
+        # YouTube DIY Search
+        if parsed["action"] == "DIY" and parsed["confidence"] >= 0.7:
+            diagnosis = parsed.get("diagnosis", "")
+            if diagnosis:
+                videos = search_youtube_videos(diagnosis)
+                parsed["youtube_urls"] = videos
 
         parsed["chat_id"] = chat_id
 
