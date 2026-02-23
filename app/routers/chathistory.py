@@ -1,17 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.db.db import supabase
-from app.auth.auth import get_current_user_id
+from app.auth.auth import get_current_user_id, get_active_vehicle
 
 router = APIRouter(prefix="/chat", tags=["Chat History"])
 
 #gives last row for each chat_id for history card in frontend
 @router.get("/history")
-async def get_chat_history(user=Depends(get_current_user_id)):
-    res = supabase.table("ai_chat_history") \
+async def get_chat_history(
+    user=Depends(get_current_user_id),
+    vehicle_id: str | None = Depends(get_active_vehicle)
+):
+    query = supabase.table("ai_chat_history") \
         .select("chat_id, prompt, response_ai, created_at") \
-        .eq("user_id", user) \
-        .order("created_at", desc=True) \
-        .execute()
+        .eq("user_id", user)
+
+    if vehicle_id:
+        query = query.eq("vehicle_id", vehicle_id)
+
+    res = query.order("created_at", desc=True).execute()
 
     if not res.data:
         return []

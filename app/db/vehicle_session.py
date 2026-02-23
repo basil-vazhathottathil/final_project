@@ -6,6 +6,7 @@ Handles active vehicle tracking and session lifecycle.
 
 from typing import Dict, Any, List
 from app.db.db import supabase
+from postgrest.exceptions import APIError
 
 
 def get_active_vehicle_id(user_id: str) -> str | None:
@@ -13,19 +14,23 @@ def get_active_vehicle_id(user_id: str) -> str | None:
     Get the currently active vehicle for a user.
     Returns vehicle_id or None if no active session.
     """
-    response = (
-        supabase
-        .table("vehicle_sessions")
-        .select("vehicle_id")
-        .eq("user_id", user_id)
-        .eq("is_active", True)
-        .single()
-        .execute()
-    )
-    
-    if response.data:
-        return response.data["vehicle_id"]
-    return None
+    try:
+        response = (
+            supabase
+            .table("vehicle_sessions")
+            .select("vehicle_id")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .single()
+            .execute()
+        )
+        
+        if response.data:
+            return response.data["vehicle_id"]
+        return None
+    except APIError:
+        # No active session found
+        return None
 
 
 def close_active_sessions(user_id: str) -> None:
@@ -64,16 +69,20 @@ def get_vehicle_by_vin(vin: str) -> Dict[str, Any] | None:
     Find a vehicle by its VIN number.
     Returns vehicle record or None if not found.
     """
-    response = (
-        supabase
-        .table("vehicles")
-        .select("*")
-        .eq("vin", vin)
-        .single()
-        .execute()
-    )
-    
-    return response.data if response.data else None
+    try:
+        response = (
+            supabase
+            .table("vehicles")
+            .select("*")
+            .eq("vin", vin)
+            .single()
+            .execute()
+        )
+        
+        return response.data if response.data else None
+    except APIError:
+        # Vehicle not found
+        return None
 
 
 def create_vehicle(user_id: str, vin: str, model: str | None = None) -> Dict[str, Any]:
@@ -85,6 +94,7 @@ def create_vehicle(user_id: str, vin: str, model: str | None = None) -> Dict[str
         "vin": vin
     }
     
+    # Only add model if provided (column is nullable in DB)
     if model:
         vehicle_data["model"] = model
     
@@ -113,14 +123,54 @@ def get_vehicle_by_id(vehicle_id: str, user_id: str) -> Dict[str, Any] | None:
     """
     Get a specific vehicle, ensuring it belongs to the user.
     """
+    try:
+        response = (
+            supabase
+            .table("vehicles")
+            .select("*")
+            .eq("id", vehicle_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        return response.data if response.data else None
+    except APIError:
+        # Vehicle not found
+        return None
+
+
+def get_user_vehicle_without_vin(user_id: str) -> Dict[str, Any] | None:
+    """
+    Get a user's vehicle that doesn't have a VIN yet.
+    Returns None if user has 0 or >1 vehicles without VIN.
+    Only returns a vehicle if user has exactly one vehicle without a VIN.
+    """
     response = (
         supabase
         .table("vehicles")
         .select("*")
-        .eq("id", vehicle_id)
         .eq("user_id", user_id)
-        .single()
+        .is_("vin", "null")
         .execute()
     )
     
-    return response.data if response.data else None
+    # Only return if exactly one vehicle without VIN
+    if response.data and len(response.data) == 1:
+        return response.data[0]
+    return None
+
+
+def update_vehicle_vin(vehicle_id: str, vin: str) -> Dict[str, Any]:
+    """
+    Update a vehicle's VIN.
+    """
+    response = (
+        supabase
+        .table("vehicles")
+        .update({"vin": vin})
+        .eq("id", vehicle_id)
+        .execute()
+    )
+    
+    return response.data[0] if response.data else {}
