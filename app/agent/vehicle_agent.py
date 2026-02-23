@@ -24,6 +24,7 @@ from app.db.ai_memory import (
 from app.agent.prompts.summary_prompt import build_summary_prompt
 from app.agent.prompts.issue_prompt import build_issue_prompt
 from app.agent.tools.youtube_search import search_youtube_videos
+from app.agent.tools.web_search import get_web_search_tool
 
 
 # Dummy UUID used by Swagger
@@ -91,6 +92,7 @@ def json_safe(obj: Any) -> Any:
 
 
 def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
+    resp.setdefault("internal_reasoning", "Diagnostic logic performed.")
     resp.setdefault("diagnosis", "Vehicle issue detected")
     resp.setdefault("explanation", "Let’s continue step by step.")
     resp.setdefault("severity", 0.5)
@@ -202,6 +204,34 @@ def run_vehicle_agent(
 
         parsed = safe_json_extract(ai_text) or {}
         parsed = normalize_agent_response(parsed)
+
+        # Cross-Verification Search (Enhancement Option 3)
+        if parsed.get("confidence", 0) < 0.7 and parsed.get("diagnosis"):
+            search_tool = get_web_search_tool()
+            query = f"{parsed['diagnosis']} car symptoms verification repair guide"
+            
+            try:
+                search_results = search_tool.invoke(query)
+                # Extract snippets for the LLM
+                results_text = "\n".join(
+                    [f"- {r.get('content', r.get('url'))}" for r in search_results[:3]]
+                )
+                
+                verification_input = (
+                    f"{combined_input}\n\n"
+                    f"ADDITIONAL VERIFIED DATA FROM WEB SEARCH:\n{results_text}\n\n"
+                    f"Please re-evaluate your diagnosis and confidence based on this new data."
+                )
+                
+                messages_v2 = prompt.format_messages(
+                    conversation_history=history_text,
+                    user_input=verification_input,
+                )
+                ai_text_v2 = llm.invoke(messages_v2).content
+                parsed_v2 = safe_json_extract(ai_text_v2) or {}
+                parsed = normalize_agent_response(parsed_v2)
+            except Exception as e:
+                print(f"Verification search failed: {e}")
 
         previous_confidence = None
         if history_structured:
