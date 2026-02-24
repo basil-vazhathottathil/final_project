@@ -123,3 +123,18 @@ def load_chat_issue_summary(chat_id: Optional[str]) -> Optional[str]:
     )
 
     return res.data[0]["summary"] if res.data else None
+
+
+def load_issue_by_id(issue_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a single issue's details for pinned context.
+    """
+    res = (
+        supabase
+        .table("issues_summary")
+        .select("title, summary, severity")
+        .eq("id", issue_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
