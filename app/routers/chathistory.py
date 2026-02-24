@@ -30,6 +30,7 @@ async def get_chat_history(
             continue
 
         if cid not in conversations:
+            # First occurrence is the newest message (due to DESC order)
             conversations[cid] = {
                 "id": cid,
                 "title": (row["prompt"] or "")[:60],
@@ -39,9 +40,8 @@ async def get_chat_history(
                 "messageCount": 1,
             }
         else:
+            # Subsequent occurrences are older messages
             conversations[cid]["messageCount"] += 1
-            conversations[cid]["lastMessage"] = row["response_ai"]
-            conversations[cid]["timestamp"] = row["created_at"]
 
     return list(conversations.values())
 
