@@ -41,6 +41,8 @@ WORKSHOP_PATTERNS = [
     "mechanic", "repair shop", "nearby garage"
 ]
 
+AFFIRMATION_KEYWORDS = ["yes", "sure", "ok", "yep", "affirmative", "do it", "please"]
+
 # LLM setup
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
@@ -163,7 +165,11 @@ def run_vehicle_agent(
     chat_issue_summary = load_chat_issue_summary(chat_id)
     open_issues = load_open_issues(vehicle_id)
 
-    if any(k in user_input.lower() for k in WORKSHOP_PATTERNS):
+    last_action = history_structured[-1].get("agent", {}).get("action") if history_structured else None
+    is_affirmation = any(k in user_input.lower() for k in AFFIRMATION_KEYWORDS)
+    is_workshop_request = any(k in user_input.lower() for k in WORKSHOP_PATTERNS)
+
+    if is_workshop_request or (last_action == "CONFIRM_WORKSHOP" and is_affirmation):
         response = build_workshop_response(chat_id)
         save_chat_turn(
             chat_id,
