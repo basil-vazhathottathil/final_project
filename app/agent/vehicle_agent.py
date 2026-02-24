@@ -19,6 +19,7 @@ from app.db.ai_memory import (
     load_chat_issue_summary,
     load_open_issues,
     upsert_issue_from_summary,
+    load_issue_by_id,  # Added here
 )
 
 from app.agent.prompts.summary_prompt import build_summary_prompt
@@ -153,6 +154,7 @@ def run_vehicle_agent(
     vehicle_id: str | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
+    issue_id: str | None = None,  # New parameter
 ) -> Dict[str, Any]:
 
     if chat_id is None or chat_id == str(SWAGGER_DUMMY_UUID):
@@ -164,6 +166,18 @@ def run_vehicle_agent(
     chat_summary = load_chat_summary(chat_id) or ""
     chat_issue_summary = load_chat_issue_summary(chat_id)
     open_issues = load_open_issues(vehicle_id)
+
+    context_blocks = []
+
+    if issue_id:
+        pinned_issue = load_issue_by_id(issue_id)
+        if pinned_issue:
+            context_blocks.append(
+                f"### STARTING NEW CHAT FROM AN EXISTING ISSUE:\n"
+                f"Title: {pinned_issue['title']}\n"
+                f"Summary: {pinned_issue['summary']}\n"
+                f"Current Severity: {pinned_issue['severity']}"
+            )
 
     last_action = history_structured[-1].get("agent", {}).get("action") if history_structured else None
     is_affirmation = any(k in user_input.lower() for k in AFFIRMATION_KEYWORDS)
@@ -179,8 +193,6 @@ def run_vehicle_agent(
             json_safe(response),
         )
         return response
-
-    context_blocks = []
 
     if chat_summary:
         context_blocks.append(f"Conversation summary:\n{chat_summary}")

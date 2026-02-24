@@ -39,4 +39,5 @@ async def chat_vehicle(
         vehicle_id=vehicle_id,  # From active session
         latitude=req.latitude,
         longitude=req.longitude,
+        issue_id=req.issue_id,
     )
