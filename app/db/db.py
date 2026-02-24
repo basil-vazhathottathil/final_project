@@ -70,7 +70,7 @@ def load_short_term_memory(chat_id: str, limit: int = 5) -> str:
         agent = row.get("response_ai")
         if isinstance(agent, dict):
             history_lines.append(
-                f"Agent: diagnosis={agent.get('diagnosis')}, action={agent.get('action')}"
+                f"Agent: {agent.get('explanation')} (diagnosis={agent.get('diagnosis')}, action={agent.get('action')})"
             )
         else:
             history_lines.append("Agent: (response unavailable)")
