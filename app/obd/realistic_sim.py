@@ -1,8 +1,8 @@
-# app/obd/realistic_simulator.py
-
 import asyncio
 import random
 from typing import Dict
+
+from app.obd.simulated_issues import SIMULATED_ISSUES
 
 
 class RealisticOBDSimulator:
@@ -17,7 +17,7 @@ class RealisticOBDSimulator:
         self.engine_load = 10
         self.throttle = 5
         self.time_running = 0
-        self.overheat_triggered = False
+        self.active_issue = None
 
     def _update_engine_warmup(self):
         if self.coolant_temp < 92:
@@ -47,13 +47,28 @@ class RealisticOBDSimulator:
     def _update_throttle(self):
         self.throttle = min(100, max(5, self.engine_load / 1.2))
 
-    def _maybe_trigger_overheat(self):
-        # After 90 seconds, 20% chance of overheat event
-        if self.time_running > 20 and not self.overheat_triggered:
-            if random.random() < 0.2:
-                print("🔥 SIMULATED OVERHEAT EVENT")
-                self.coolant_temp = 110
-                self.overheat_triggered = True
+    def _maybe_trigger_issue(self):
+        # After 20 seconds, if no active issue, 15% chance of triggering a random one
+        if self.time_running > 20 and not self.active_issue:
+            if random.random() < 0.15:
+                self.active_issue = random.choice(SIMULATED_ISSUES)
+                print(f"⚠️ SIMULATED ISSUE TRIGGERED: {self.active_issue['name']}")
+
+        # If issue active, apply its effect
+        if self.active_issue:
+            metric = self.active_issue["metric"]
+            target_value = self.active_issue["value"]
+
+            if metric == "coolant_temp_c":
+                self.coolant_temp = target_value
+            elif metric == "rpm":
+                self.rpm = target_value
+            elif metric == "speed_kmph":
+                self.speed = target_value
+            elif metric == "engine_load_pct":
+                self.engine_load = target_value
+            elif metric == "throttle_pct":
+                self.throttle = target_value
 
     def step(self) -> Dict[str, float]:
         self.time_running += 1
@@ -63,7 +78,7 @@ class RealisticOBDSimulator:
         self._update_rpm()
         self._update_engine_load()
         self._update_throttle()
-        self._maybe_trigger_overheat()
+        self._maybe_trigger_issue()
 
         return {
             "speed_kmph": round(self.speed, 1),
