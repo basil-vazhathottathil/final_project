@@ -38,8 +38,9 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
 ]
 
 WORKSHOP_PATTERNS = [
-    "workshop", "garage", "service center",
-    "mechanic", "repair shop", "nearby garage"
+    "workshop", "garage", "service center", "mechanic", "repair shop", 
+    "nearby garage", "where is the nearest", "find a shop", "fix it for me",
+    "professional help", "take it to a shop"
 ]
 
 AFFIRMATION_KEYWORDS = ["yes", "sure", "ok", "yep", "affirmative", "do it", "please"]
@@ -284,6 +285,13 @@ def run_vehicle_agent(
             if diagnosis:
                 videos = search_youtube_videos(diagnosis)
                 parsed["youtube_urls"] = videos
+
+        # Workshop Results Population
+        if parsed["action"] == "WORKSHOP_RESULTS":
+            from app.agent.services.workshop_giver import _find_nearby_workshops
+            if latitude is not None and longitude is not None:
+                result = _find_nearby_workshops({"latitude": latitude, "longitude": longitude})
+                parsed["maps_urls"] = result.get("maps_urls", [])
 
         parsed["chat_id"] = chat_id
 

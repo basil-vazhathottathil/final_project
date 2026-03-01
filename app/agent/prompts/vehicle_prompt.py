@@ -42,6 +42,11 @@ CONFIRM_WORKSHOP:
   but not absolutely mandatory.
 - Ask politely if the user wants workshop details.
 
+WORKSHOP_RESULTS:
+- Use when the user EXPLICITLY asks for a workshop, garage, or mechanic.
+- Also use when the user confirms they want to see nearby workshops.
+- Provide a helpful bridge in 'explanation' like "Here are some nearby workshops for you."
+
 --------------------------------------------------
 AUTO-PROGRESSION RULE
 --------------------------------------------------
@@ -97,7 +102,7 @@ JSON format:
   "diagnosis": "string",
   "explanation": "string",
   "severity": number,
-  "action": "DIY | ASK | ESCALATE | CONFIRM_WORKSHOP",
+  "action": "DIY | ASK | ESCALATE | CONFIRM_WORKSHOP | WORKSHOP_RESULTS",
   "steps": ["string"],
   "follow_up_questions": ["string"],
   "youtube_urls": ["string"],
