@@ -20,3 +20,4 @@ class AgentResponse(BaseModel):
     confidence: float
     chat_id: str
     youtube_urls: list[str] = []
+    maps_urls: list[str] = []

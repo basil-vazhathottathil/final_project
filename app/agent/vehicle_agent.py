@@ -132,7 +132,20 @@ def count_consecutive_escalates(history: List[Dict[str, Any]], limit: int = 5) -
     return count
 
 
-def build_workshop_response(chat_id: str) -> Dict[str, Any]:
+def build_workshop_response(
+    chat_id: str,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> Dict[str, Any]:
+    from app.agent.services.workshop_giver import _find_nearby_workshops
+
+    maps_urls: list[str] = []
+    if latitude is not None and longitude is not None:
+        result = _find_nearby_workshops(
+            {"latitude": latitude, "longitude": longitude}
+        )
+        maps_urls = result.get("maps_urls", [])
+
     return {
         "diagnosis": "Professional assistance recommended",
         "explanation": "Here are nearby workshops that can help with this issue.",
@@ -142,6 +155,7 @@ def build_workshop_response(chat_id: str) -> Dict[str, Any]:
         "follow_up_questions": [],
         "confidence": 0.9,
         "chat_id": chat_id,
+        "maps_urls": maps_urls,
     }
 
 
@@ -184,7 +198,7 @@ def run_vehicle_agent(
     is_workshop_request = any(k in user_input.lower() for k in WORKSHOP_PATTERNS)
 
     if is_workshop_request or (last_action == "CONFIRM_WORKSHOP" and is_affirmation):
-        response = build_workshop_response(chat_id)
+        response = build_workshop_response(chat_id, latitude, longitude)
         save_chat_turn(
             chat_id,
             user_id,
