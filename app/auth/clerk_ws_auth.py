@@ -23,7 +23,6 @@ async def verify_clerk_ws(websocket: WebSocket):
     token = websocket.query_params.get("token")
 
     if not token:
-        await websocket.close(code=1008)
         return None
 
     try:
@@ -40,5 +39,4 @@ async def verify_clerk_ws(websocket: WebSocket):
         return payload.get("sub")
 
     except Exception:
-        await websocket.close(code=1008)
         return None
