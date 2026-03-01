@@ -40,7 +40,9 @@ GENERIC_FOLLOW_UP_QUESTIONS = [
 WORKSHOP_PATTERNS = [
     "workshop", "garage", "service center", "mechanic", "repair shop", 
     "nearby garage", "where is the nearest", "find a shop", "fix it for me",
-    "professional help", "take it to a shop"
+    "professional help", "take it to a shop", "show workshops", 
+    "nearby workshops", "where can i fix this", "look for a garage",
+    "find a mechanic"
 ]
 
 AFFIRMATION_KEYWORDS = ["yes", "sure", "ok", "yep", "affirmative", "do it", "please"]
@@ -104,14 +106,15 @@ def normalize_agent_response(resp: Dict[str, Any]) -> Dict[str, Any]:
     resp.setdefault("steps", [])
     resp.setdefault("follow_up_questions", GENERIC_FOLLOW_UP_QUESTIONS)
     resp.setdefault("youtube_urls", [])
+    resp.setdefault("maps_urls", [])
     resp.setdefault("confidence", 0.5)
 
     resp["severity"] = float(resp["severity"])
     resp["confidence"] = float(resp["confidence"])
 
-    if resp["action"] != "DIY":
-        resp["steps"] = []
+    if resp["action"] not in {"DIY", "WORKSHOP_RESULTS"}:
         resp["youtube_urls"] = []
+        resp["maps_urls"] = []
 
     return resp
 
