@@ -193,7 +193,9 @@ def run_vehicle_agent(
                 f"Current Severity: {pinned_issue['severity']}"
             )
 
-    last_action = history_structured[-1].get("agent", {}).get("action") if history_structured else None
+    last_turn = history_structured[-1] if history_structured else {}
+    last_agent = last_turn.get("agent") or {}
+    last_action = last_agent.get("action") if isinstance(last_agent, dict) else None
     is_affirmation = any(k in user_input.lower() for k in AFFIRMATION_KEYWORDS)
     is_workshop_request = any(k in user_input.lower() for k in WORKSHOP_PATTERNS)
 
