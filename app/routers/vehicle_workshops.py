@@ -6,7 +6,7 @@ from app.agent.services.workshop_giver import get_workshop_tool
 from app.models.workshop import WorkshopResponse
 
 router = APIRouter(
-    prefix="/vehicle",
+    prefix="/locations",
     tags=["Vehicle Workshops"]
 )
 
