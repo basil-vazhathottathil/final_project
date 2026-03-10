@@ -47,7 +47,19 @@ WORKSHOP_PATTERNS = [
 
 AFFIRMATION_KEYWORDS = ["yes", "sure", "ok", "yep", "affirmative", "do it", "please"]
 
-# LLM setup
+# -------------------- Thresholds & Constants --------------------
+# CONFIDENCE_THRESHOLD: Minimum confidence for a definitive action (DIY / issue creation).
+# Below this value, the system either gathers more context (ASK) or triggers
+# Cross-Verification Search to augment the diagnosis with web-retrieved data.
+CONFIDENCE_THRESHOLD: float = 0.7
+
+# CROSS_VERIFICATION_THRESHOLD: Confidence below which web search is triggered.
+# Set equal to CONFIDENCE_THRESHOLD so all low-confidence decisions are verified.
+CROSS_VERIFICATION_THRESHOLD: float = CONFIDENCE_THRESHOLD
+
+# LLM setup — moonshotai/kimi-k2-instruct-0905 via Groq API.
+# Tokeniser: Tiktoken-compatible BPE (same family as the model's native tokeniser).
+# Temperature set low (0.2) to maximise diagnostic consistency.
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model="moonshotai/kimi-k2-instruct-0905",
@@ -243,8 +255,10 @@ def run_vehicle_agent(
         parsed = safe_json_extract(ai_text) or {}
         parsed = normalize_agent_response(parsed)
 
-        # Cross-Verification Search (Enhancement Option 3)
-        if parsed.get("confidence", 0) < 0.7 and parsed.get("diagnosis"):
+        # Cross-Verification Search
+        # Triggered when confidence < CROSS_VERIFICATION_THRESHOLD (0.7).
+        # Uses Tavily web search (RAG-style) to augment diagnosis with real-world data.
+        if parsed.get("confidence", 0) < CROSS_VERIFICATION_THRESHOLD and parsed.get("diagnosis"):
             search_tool = get_web_search_tool()
             query = f"{parsed['diagnosis']} car symptoms verification repair guide"
             
@@ -282,8 +296,8 @@ def run_vehicle_agent(
             parsed["confidence"]
         )
 
-        # YouTube DIY Search
-        if parsed["action"] == "DIY" and parsed["confidence"] >= 0.7:
+        # YouTube DIY Search — only when confidence >= CONFIDENCE_THRESHOLD.
+        if parsed["action"] == "DIY" and parsed["confidence"] >= CONFIDENCE_THRESHOLD:
             diagnosis = parsed.get("diagnosis", "")
             if diagnosis:
                 videos = search_youtube_videos(diagnosis)
@@ -324,7 +338,7 @@ def run_vehicle_agent(
 
         if (
             updated_summary
-            and parsed["confidence"] >= 0.7
+            and parsed["confidence"] >= CONFIDENCE_THRESHOLD
             and parsed["action"] in {"ESCALATE", "CONFIRM_WORKSHOP"}
         ):
             issue_prompt = build_issue_prompt(updated_summary)
