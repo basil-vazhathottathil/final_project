@@ -25,6 +25,7 @@ from app.db.vehicle_session import (
     get_user_vehicle_without_vin,
     update_vehicle_vin,
 )
+from app.db.users import ensure_user_exists
 
 router = APIRouter(
     prefix="/vehicle",
@@ -59,6 +60,8 @@ async def identify_vehicle(
         - Return vehicle_id and is_new=true
     """
     user_id = user["sub"]
+    # Upsert user into Supabase so FK constraint is satisfied for new Clerk users
+    ensure_user_exists(user_id)
     vin = req.vin.upper()  # Normalize VIN to uppercase
     
     # Check if vehicle already exists by VIN
