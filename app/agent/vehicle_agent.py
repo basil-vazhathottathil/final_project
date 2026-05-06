@@ -57,12 +57,13 @@ CONFIDENCE_THRESHOLD: float = 0.7
 # Set equal to CONFIDENCE_THRESHOLD so all low-confidence decisions are verified.
 CROSS_VERIFICATION_THRESHOLD: float = CONFIDENCE_THRESHOLD
 
-# LLM setup — moonshotai/kimi-k2-instruct-0905 via Groq API.
-# Tokeniser: Tiktoken-compatible BPE (same family as the model's native tokeniser).
+# LLM setup — llama-3.3-70b-versatile via Groq API.
+# Replaced kimi-k2-instruct-0905 (deprecated Apr 2026) with Llama 3.3 70B
+# for superior reasoning with 70B dense active parameters.
 # Temperature set low (0.2) to maximise diagnostic consistency.
 llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="moonshotai/kimi-k2-instruct-0905",
+    model="llama-3.3-70b-versatile",
     temperature=0.2,
 )
 

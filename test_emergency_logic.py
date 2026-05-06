@@ -10,7 +10,7 @@ load_dotenv()
 # Simplified LLM setup matching vehicle_agent.py
 llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
-    model="moonshotai/kimi-k2-instruct-0905",
+    model="llama-3.3-70b-versatile",
     temperature=0.2,
 )
 
